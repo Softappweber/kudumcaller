@@ -187,9 +187,8 @@ app.get('/stats', (req, res) => {
   });
 });
 
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 5000;  // ✅ Render = 10000, Local = 5000
+// ... rest of code
 server.listen(PORT, () => {
-  console.log(`🎯 SoloCall Server running on port ${PORT}`);
-  console.log(`🌐 Health check: http://localhost:${PORT}/health`);
-  console.log(`📊 Stats: http://localhost:${PORT}/stats`);
+    console.log(`Server running on port ${PORT}`);
 });
