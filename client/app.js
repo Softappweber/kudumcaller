@@ -4,7 +4,7 @@
 
 // ===== CONFIGURATION =====
 const CONFIG = {
-    // Replace with your deployed server URL
+    // ✅ FIXED: Use Render URL for production
     SERVER_URL: window.location.hostname === 'localhost' 
         ? 'http://localhost:5000' 
         : 'https://kudumcaller.onrender.com',
@@ -13,6 +13,7 @@ const CONFIG = {
         iceServers: [
             { urls: 'stun:stun.l.google.com:19302' },
             { urls: 'stun:stun1.l.google.com:19302' },
+            { urls: 'stun:stun2.l.google.com:19302' },
         ]
     }
 };
@@ -81,10 +82,17 @@ function hideLoading() {
 function connectSocket() {
     return new Promise((resolve, reject) => {
         try {
+            // ✅ FIXED: Load Socket.io from CDN (since we're not using Node modules)
+            if (typeof io === 'undefined') {
+                reject(new Error('Socket.io library not loaded. Please check your internet connection.'));
+                return;
+            }
+            
             const socket = io(CONFIG.SERVER_URL, {
                 transports: ['websocket', 'polling'],
                 reconnectionAttempts: 5,
-                reconnectionDelay: 1000
+                reconnectionDelay: 1000,
+                timeout: 10000
             });
             
             socket.on('connect', () => {
@@ -145,13 +153,13 @@ async function createRoom() {
         
         return new Promise((resolve, reject) => {
             socket.emit('create-room', (response) => {
-                if (response.success) {
+                if (response && response.success) {
                     state.roomId = response.roomId;
                     state.isHost = true;
                     showToast(`Room created: ${response.roomId}`, 'success');
                     resolve(response.roomId);
                 } else {
-                    reject(new Error('Failed to create room'));
+                    reject(new Error(response?.error || 'Failed to create room'));
                 }
             });
         });
@@ -170,13 +178,13 @@ async function joinRoom(roomId) {
         
         return new Promise((resolve, reject) => {
             socket.emit('join-room', roomId, (response) => {
-                if (response.success) {
+                if (response && response.success) {
                     state.roomId = roomId;
                     state.isHost = false;
                     showToast(`Joined room ${roomId}`, 'success');
                     resolve(roomId);
                 } else {
-                    reject(new Error(response.error || 'Failed to join room'));
+                    reject(new Error(response?.error || 'Failed to join room'));
                 }
             });
         });
@@ -450,7 +458,8 @@ function updateCallStatus(status) {
 function copyRoomLink() {
     if (!state.roomId) return;
     
-    const baseUrl = window.location.origin + window.location.pathname;
+    // ✅ FIXED: Use the correct base URL for GitHub Pages
+    const baseUrl = window.location.origin + '/kudumcaller';
     const link = `${baseUrl}?room=${state.roomId}`;
     
     navigator.clipboard.writeText(link).then(() => {
@@ -561,8 +570,9 @@ async function init() {
         // Check for auto-join
         checkUrlForRoom();
         
-        console.log('🎯 SoloCall initialized');
+        console.log('🎯 KudumCaller initialized');
         console.log('📱 Share a URL to start a voice call!');
+        console.log('🔗 Server URL:', CONFIG.SERVER_URL);
         
     } catch (error) {
         console.error('Init error:', error);
