@@ -1,5 +1,5 @@
 // =====================================================
-// SOLOCALL - Complete WebRTC Voice Calling App
+// KUDUMCALLER - Complete WebRTC Voice Calling App
 // =====================================================
 
 // ===== CONFIGURATION =====
@@ -7,7 +7,7 @@ const CONFIG = {
     // Replace with your deployed server URL
     SERVER_URL: window.location.hostname === 'localhost' 
         ? 'http://localhost:5000' 
-        : 'https://your-server-url.com',
+        : 'https://kudumcaller.onrender.com',
     MAX_RETRIES: 3,
     ICE_SERVERS: {
         iceServers: [
