@@ -4,7 +4,6 @@
 
 // ===== CONFIGURATION =====
 const CONFIG = {
-    // ✅ FIXED: Use Render URL for production
     SERVER_URL: window.location.hostname === 'localhost' 
         ? 'http://localhost:5000' 
         : 'https://kudumcaller.onrender.com',
@@ -82,7 +81,6 @@ function hideLoading() {
 function connectSocket() {
     return new Promise((resolve, reject) => {
         try {
-            // ✅ FIXED: Load Socket.io from CDN (since we're not using Node modules)
             if (typeof io === 'undefined') {
                 reject(new Error('Socket.io library not loaded. Please check your internet connection.'));
                 return;
@@ -117,10 +115,7 @@ function connectSocket() {
                 }
             });
             
-            // WebRTC signaling
             socket.on('signal', handleSignal);
-            
-            // Room events
             socket.on('user-joined', handleUserJoined);
             socket.on('user-left', handleUserLeft);
             socket.on('user-muted', handleUserMuted);
@@ -205,7 +200,6 @@ async function ensureSocket() {
 // ===== WEBRTC SETUP =====
 async function setupWebRTC() {
     try {
-        // Get local audio stream
         state.localStream = await navigator.mediaDevices.getUserMedia({
             audio: {
                 echoCancellation: true,
@@ -214,15 +208,12 @@ async function setupWebRTC() {
             }
         });
         
-        // Create peer connection
         state.peerConnection = new RTCPeerConnection(CONFIG.ICE_SERVERS);
         
-        // Add local tracks
         state.localStream.getTracks().forEach(track => {
             state.peerConnection.addTrack(track, state.localStream);
         });
         
-        // Handle remote stream
         state.peerConnection.ontrack = (event) => {
             const remoteAudio = new Audio();
             remoteAudio.srcObject = event.streams[0];
@@ -233,7 +224,6 @@ async function setupWebRTC() {
             showToast('Call connected!', 'success');
         };
         
-        // Handle ICE candidates
         state.peerConnection.onicecandidate = (event) => {
             if (event.candidate && state.socket && state.roomId) {
                 state.socket.emit('signal', {
@@ -243,7 +233,6 @@ async function setupWebRTC() {
             }
         };
         
-        // Handle connection state changes
         state.peerConnection.onconnectionstatechange = () => {
             const state_change = state.peerConnection.connectionState;
             console.log('Connection state:', state_change);
@@ -307,7 +296,6 @@ async function initiateCall() {
         await setupWebRTC();
         
         if (state.isHost) {
-            // Host creates offer
             const offer = await state.peerConnection.createOffer();
             await state.peerConnection.setLocalDescription(offer);
             
@@ -336,9 +324,7 @@ function handleUserJoined(data) {
     dom.statusText.textContent = 'Connecting...';
     showToast('Someone joined the room!', 'success');
     
-    // Start call if we're the host
     if (state.isHost && !state.isConnected) {
-        // Send offer
         state.peerConnection.createOffer()
             .then(offer => state.peerConnection.setLocalDescription(offer))
             .then(() => {
@@ -383,7 +369,6 @@ function toggleMute() {
     icon.textContent = state.isMuted ? '🔇' : '🎤';
     dom.muteBtn.querySelector('.control-label').textContent = state.isMuted ? 'Unmute' : 'Mute';
     
-    // Notify others
     if (state.socket && state.roomId) {
         state.socket.emit('toggle-mute', {
             roomId: state.roomId,
@@ -393,7 +378,6 @@ function toggleMute() {
 }
 
 function endCall() {
-    // Clean up WebRTC
     if (state.peerConnection) {
         state.peerConnection.close();
         state.peerConnection = null;
@@ -408,7 +392,6 @@ function endCall() {
     state.isInCall = false;
     state.remoteUserId = null;
     
-    // Reset UI
     dom.callScreen.classList.add('hidden');
     dom.homeScreen.classList.remove('hidden');
     dom.statusText.textContent = 'Ready';
@@ -418,7 +401,6 @@ function endCall() {
     dom.muteBtn.querySelector('.control-label').textContent = 'Mute';
     updateCallStatus('idle');
     
-    // Leave room
     if (state.socket && state.roomId) {
         state.socket.disconnect();
         state.socket = null;
@@ -454,18 +436,17 @@ function updateCallStatus(status) {
     }
 }
 
-// ===== SHARE FUNCTIONALITY =====
+// ===== SHARE FUNCTIONALITY - FIXED FOR GITHUB PAGES =====
 function copyRoomLink() {
     if (!state.roomId) return;
     
-    // ✅ FIXED: Use the correct base URL for GitHub Pages
-    const baseUrl = window.location.origin + '/kudumcaller';
+    // ✅ FIX: Use /client/ path for GitHub Pages
+    const baseUrl = window.location.origin + '/kudumcaller/client';
     const link = `${baseUrl}?room=${state.roomId}`;
     
     navigator.clipboard.writeText(link).then(() => {
         showToast('Room link copied! 📋 Share it with anyone.', 'success');
     }).catch(() => {
-        // Fallback
         const textarea = document.createElement('textarea');
         textarea.value = link;
         document.body.appendChild(textarea);
@@ -481,7 +462,6 @@ function checkUrlForRoom() {
     const params = new URLSearchParams(window.location.search);
     const roomId = params.get('room');
     if (roomId) {
-        // Clear URL param to prevent rejoin on refresh
         window.history.replaceState({}, '', window.location.pathname);
         setTimeout(() => handleJoinRoom(roomId), 500);
     }
@@ -501,7 +481,6 @@ async function handleCreateCall() {
         state.isInCall = true;
         await initiateCall();
         
-        // Auto-copy link after creation
         setTimeout(copyRoomLink, 1000);
         
     } catch (error) {
@@ -511,7 +490,6 @@ async function handleCreateCall() {
 }
 
 async function handleJoinRoom(roomId) {
-    // If no roomId provided, get from input
     if (!roomId) {
         roomId = dom.roomInput.value.trim();
     }
@@ -563,11 +541,8 @@ document.addEventListener('keydown', (e) => {
 // ===== INIT =====
 async function init() {
     try {
-        // Connect to socket
         await connectSocket();
         hideLoading();
-        
-        // Check for auto-join
         checkUrlForRoom();
         
         console.log('🎯 KudumCaller initialized');
@@ -581,5 +556,4 @@ async function init() {
     }
 }
 
-// Start the app
 init();
