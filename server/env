@@ -1,0 +1,6 @@
+# Server Configuration
+PORT=5000
+CLIENT_URL=*
+
+# For production, replace * with your actual client URL
+# CLIENT_URL=https://your-app.vercel.app
