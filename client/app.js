@@ -1,8 +1,7 @@
 // =====================================================
-// SOLODS KUDUMCALLER - Complete WebRTC Voice Calling App
+// SOLODS KUDUMCALLER - FIXED WebRTC
 // =====================================================
 
-// ===== CONFIGURATION =====
 const CONFIG = {
     SERVER_URL: window.location.hostname === 'localhost' 
         ? 'http://localhost:5000' 
@@ -10,8 +9,10 @@ const CONFIG = {
     MAX_RETRIES: 3,
     ICE_SERVERS: {
         iceServers: [
+            // Cloudflare STUN
             { urls: 'stun:stun.cloudflare.com:3478' },
             { urls: 'stun:stun.cloudflare.com:53' },
+            // Cloudflare TURN
             {
                 urls: ['turn:turn.cloudflare.com:3478?transport=udp'],
                 username: 'any-username',
@@ -22,7 +23,15 @@ const CONFIG = {
                 username: 'any-username',
                 credential: 'any-credential'
             },
-            { urls: 'stun:stun.l.google.com:19302' }
+            // Google STUN
+            { urls: 'stun:stun.l.google.com:19302' },
+            { urls: 'stun:stun1.l.google.com:19302' },
+            // Metered TURN (Free fallback)
+            {
+                urls: ['turn:openrelay.metered.ca:80'],
+                username: 'openrelayproject',
+                credential: 'openrelayproject'
+            }
         ]
     }
 };
@@ -75,14 +84,14 @@ const dom = {
     shareCopyBtn: $('share-copy-btn'),
     toastContainer: $('toast-container'),
     callCount: $('call-count'),
-    installBtn: $('install-btn')
+    installBtn: $('install-app-btn'),
+    installContainer: $('install-btn-container')
 };
 
 // ===== PLATFORM DETECTION =====
 function detectPlatform() {
     const isMobile = /Android|iPhone|iPad|iPod|BlackBerry|Windows Phone/i.test(navigator.userAgent);
-    const isTablet = /iPad|Android(?!.*Mobile)/i.test(navigator.userAgent);
-    state.platform = (isMobile || isTablet) ? 'mobile' : 'desktop';
+    state.platform = isMobile ? 'mobile' : 'desktop';
     console.log('Platform:', state.platform);
     return state.platform;
 }
@@ -220,17 +229,44 @@ async function ensureSocket() {
     return await connectSocket();
 }
 
-// ===== WEBRTC =====
+// ===== WEBRTC SETUP WITH ICE DEBUGGING =====
 async function setupWebRTC() {
     try {
         state.localStream = await navigator.mediaDevices.getUserMedia({
             audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
         });
+        
         state.peerConnection = new RTCPeerConnection(CONFIG.ICE_SERVERS);
+        
+        // ===== ICE CONNECTION STATE =====
+        state.peerConnection.oniceconnectionstatechange = () => {
+            const s = state.peerConnection.iceConnectionState;
+            console.log('ICE Connection State:', s);
+            if (s === 'failed') {
+                showToast('Network issue! Try using a different network.', 'error');
+                endCall();
+            } else if (s === 'connected') {
+                console.log('ICE Connected! Audio should work.');
+            }
+        };
+        
+        // ===== ICE CANDIDATE LOGGING =====
+        state.peerConnection.onicecandidate = (event) => {
+            if (event.candidate && state.socket && state.roomId) {
+                console.log('ICE Candidate:', event.candidate.type);
+                state.socket.emit('signal', {
+                    roomId: state.roomId,
+                    signal: { candidate: event.candidate }
+                });
+            }
+        };
+        
         state.localStream.getTracks().forEach(track => {
             state.peerConnection.addTrack(track, state.localStream);
         });
+        
         state.peerConnection.ontrack = (event) => {
+            console.log('✅ Remote audio track received!');
             const remoteAudio = new Audio();
             remoteAudio.srcObject = event.streams[0];
             remoteAudio.play().catch(err => console.warn('Autoplay:', err));
@@ -241,17 +277,10 @@ async function setupWebRTC() {
             dom.incomingCall.classList.add('hidden');
             stopRinging();
         };
-        state.peerConnection.onicecandidate = (event) => {
-            if (event.candidate && state.socket && state.roomId) {
-                state.socket.emit('signal', {
-                    roomId: state.roomId,
-                    signal: { candidate: event.candidate }
-                });
-            }
-        };
+        
         state.peerConnection.onconnectionstatechange = () => {
             const s = state.peerConnection.connectionState;
-            console.log('Connection state:', s);
+            console.log('Connection State:', s);
             if (s === 'connected') {
                 dom.statusText.textContent = 'Connected - Talk now! 🎤';
                 updateCallStatus('connected');
@@ -263,6 +292,7 @@ async function setupWebRTC() {
                 showToast('Call disconnected', 'error');
             }
         };
+        
         return true;
     } catch (error) {
         console.error('WebRTC error:', error);
@@ -345,7 +375,7 @@ async function handleSignal(data) {
         const { signal } = data;
         
         if (signal.offer) {
-            console.log('Received offer');
+            console.log('📨 Received offer');
             state.pendingOffer = signal.offer;
             
             if (state.isReceiver) {
@@ -357,7 +387,7 @@ async function handleSignal(data) {
             }
             
         } else if (signal.answer) {
-            console.log('Received answer');
+            console.log('📨 Received answer');
             await state.peerConnection.setRemoteDescription(new RTCSessionDescription(signal.answer));
             dom.incomingCall.classList.add('hidden');
             stopRinging();
@@ -367,7 +397,7 @@ async function handleSignal(data) {
             showToast('Call connected!', 'success');
             
         } else if (signal.candidate) {
-            console.log('Received candidate');
+            console.log('📨 Received candidate');
             if (state.peerConnection.remoteDescription) {
                 await state.peerConnection.addIceCandidate(new RTCIceCandidate(signal.candidate));
             } else {
@@ -575,30 +605,20 @@ function checkUrlForRoom() {
     }
 }
 
-// ===== PWA INSTALL BANNER =====
+// ===== PWA INSTALL =====
 let deferredPrompt;
 
 window.addEventListener('beforeinstallprompt', (e) => {
     e.preventDefault();
     deferredPrompt = e;
-    if (dom.installBtn) {
-        dom.installBtn.style.display = 'block';
-        dom.installBtn.onclick = () => {
-            deferredPrompt.prompt();
-            deferredPrompt.userChoice.then((choiceResult) => {
-                if (choiceResult.outcome === 'accepted') {
-                    console.log('PWA installed');
-                }
-                deferredPrompt = null;
-                dom.installBtn.style.display = 'none';
-            });
-        };
+    if (dom.installContainer) {
+        dom.installContainer.style.display = 'block';
     }
 });
 
 window.addEventListener('appinstalled', () => {
     console.log('PWA installed');
-    if (dom.installBtn) dom.installBtn.style.display = 'none';
+    if (dom.installContainer) dom.installContainer.style.display = 'none';
 });
 
 // ===== EVENT HANDLERS =====
@@ -682,6 +702,21 @@ dom.shareSmsBtn.addEventListener('click', shareViaSMS);
 dom.shareEmailBtn.addEventListener('click', shareViaEmail);
 dom.shareCopyBtn.addEventListener('click', copyRoomLink);
 
+if (dom.installBtn) {
+    dom.installBtn.addEventListener('click', () => {
+        if (deferredPrompt) {
+            deferredPrompt.prompt();
+            deferredPrompt.userChoice.then((choiceResult) => {
+                if (choiceResult.outcome === 'accepted') {
+                    console.log('PWA installed');
+                }
+                deferredPrompt = null;
+                if (dom.installContainer) dom.installContainer.style.display = 'none';
+            });
+        }
+    });
+}
+
 document.addEventListener('click', enableAudioOnInteraction);
 document.addEventListener('touchstart', enableAudioOnInteraction);
 
@@ -700,7 +735,7 @@ async function init() {
         console.log('SoloDS KudumCaller initialized');
         console.log('Platform:', state.platform);
         console.log('Server:', CONFIG.SERVER_URL);
-        console.log('Tap screen to enable audio on mobile');
+        console.log('ICE Servers:', CONFIG.ICE_SERVERS);
     } catch (error) {
         console.error('Init error:', error);
         hideLoading();
