@@ -159,7 +159,7 @@ async function createRoom() {
                     state.isHost = true;
                     state.callCount++;
                     dom.callCount.textContent = state.callCount;
-                    showToast(`Room created: ${response.roomId}`, 'success');
+                    showToast('Room created: ' + response.roomId, 'success');
                     resolve(response.roomId);
                 } else {
                     reject(new Error(response?.error || 'Failed to create room'));
@@ -175,7 +175,7 @@ async function createRoom() {
 // ===== JOIN ROOM =====
 async function joinRoom(roomId) {
     try {
-        showToast(`Joining room ${roomId}...`, 'info');
+        showToast('Joining room ' + roomId + '...', 'info');
         
         const socket = await ensureSocket();
         
@@ -184,7 +184,7 @@ async function joinRoom(roomId) {
                 if (response && response.success) {
                     state.roomId = roomId;
                     state.isHost = false;
-                    showToast(`Joined room ${roomId}`, 'success');
+                    showToast('Joined room ' + roomId, 'success');
                     resolve(roomId);
                 } else {
                     reject(new Error(response?.error || 'Failed to join room'));
@@ -380,12 +380,11 @@ async function initiateCall() {
 }
 
 function handleUserJoined(data) {
-    console.log('👤 User joined:', data);
+    console.log('User joined:', data);
     dom.participantStatus.textContent = 'Someone joined! Connecting... 🔗';
     dom.statusText.textContent = 'Connecting...';
     showToast('Someone joined the room! 🔔', 'success');
     
-    // Play ringtone
     startRinging();
     
     if (state.isHost && !state.isConnected) {
@@ -402,7 +401,7 @@ function handleUserJoined(data) {
 }
 
 function handleUserLeft(data) {
-    console.log('👋 User left:', data);
+    console.log('User left:', data);
     dom.participantStatus.textContent = 'User left the call';
     dom.statusText.textContent = 'Waiting for someone...';
     showToast('Other user left the call', 'info');
@@ -413,4 +412,266 @@ function handleUserLeft(data) {
 
 function handleUserMuted(data) {
     if (data.userId !== state.socket.id) {
-        showToast(data.muted ? 'Other user muted
+        showToast(data.muted ? 'Other user muted 🎤🔇' : 'Other user unmuted 🎤', 'info');
+    }
+}
+
+function handleNewHost(data) {
+    showToast('You are now the host', 'info');
+}
+
+// ===== CALL CONTROLS =====
+function toggleMute() {
+    if (!state.localStream) return;
+    state.isMuted = !state.isMuted;
+    state.localStream.getAudioTracks().forEach(track => {
+        track.enabled = !state.isMuted;
+    });
+    
+    dom.muteBtn.classList.toggle('muted', state.isMuted);
+    const icon = dom.muteBtn.querySelector('.control-icon');
+    icon.textContent = state.isMuted ? '🔇' : '🎤';
+    dom.muteBtn.querySelector('.control-label').textContent = state.isMuted ? 'Unmute' : 'Mute';
+    
+    if (state.socket && state.roomId) {
+        state.socket.emit('toggle-mute', {
+            roomId: state.roomId,
+            muted: state.isMuted
+        });
+    }
+}
+
+function endCall() {
+    if (state.peerConnection) {
+        state.peerConnection.close();
+        state.peerConnection = null;
+    }
+    
+    if (state.localStream) {
+        state.localStream.getTracks().forEach(track => track.stop());
+        state.localStream = null;
+    }
+    
+    state.isConnected = false;
+    state.isInCall = false;
+    state.remoteUserId = null;
+    stopRinging();
+    
+    dom.callScreen.classList.add('hidden');
+    dom.homeScreen.classList.remove('hidden');
+    dom.statusText.textContent = 'Ready';
+    dom.participantStatus.textContent = '';
+    dom.muteBtn.classList.remove('muted');
+    dom.muteBtn.querySelector('.control-icon').textContent = '🎤';
+    dom.muteBtn.querySelector('.control-label').textContent = 'Mute';
+    updateCallStatus('idle');
+    
+    if (state.socket && state.roomId) {
+        state.socket.disconnect();
+        state.socket = null;
+    }
+    
+    state.roomId = null;
+    state.isHost = false;
+    
+    showToast('Call ended', 'info');
+}
+
+function updateCallStatus(status) {
+    const indicator = dom.connectionIndicator;
+    const text = dom.statusText;
+    
+    indicator.className = 'status-indicator';
+    
+    switch(status) {
+        case 'connecting':
+            indicator.classList.add('connecting');
+            text.textContent = 'Connecting...';
+            break;
+        case 'connected':
+            indicator.classList.add('connected');
+            text.textContent = 'Connected - Talk now! 🎤';
+            break;
+        case 'disconnected':
+            indicator.classList.add('disconnected');
+            text.textContent = 'Disconnected';
+            break;
+        default:
+            text.textContent = 'Ready';
+    }
+}
+
+// ===== SHARE FUNCTIONALITY =====
+function getRoomLink() {
+    if (!state.roomId) return '';
+    const baseUrl = window.location.origin + '/kudumcaller/client';
+    return baseUrl + '?room=' + state.roomId;
+}
+
+function copyRoomLink() {
+    const link = getRoomLink();
+    if (!link) return;
+    
+    navigator.clipboard.writeText(link).then(() => {
+        showToast('Room link copied! 📋', 'success');
+    }).catch(() => {
+        const textarea = document.createElement('textarea');
+        textarea.value = link;
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand('copy');
+        textarea.remove();
+        showToast('Room link copied! 📋', 'success');
+    });
+}
+
+function updateLinkDisplay() {
+    const link = getRoomLink();
+    if (dom.roomLinkDisplay) {
+        dom.roomLinkDisplay.value = link;
+    }
+}
+
+// ===== SHARE VIA SMS =====
+function shareViaSMS() {
+    const link = getRoomLink();
+    if (!link) return;
+    
+    const message = 'Join my SoloDS KudumCaller call: ' + link;
+    const smsUrl = 'sms:?body=' + encodeURIComponent(message);
+    window.location.href = smsUrl;
+    
+    setTimeout(() => {
+        showToast('SMS app opened! Send the message.', 'info');
+    }, 500);
+}
+
+// ===== SHARE VIA WHATSAPP =====
+function shareViaWhatsApp() {
+    const link = getRoomLink();
+    if (!link) return;
+    
+    const message = 'Join my SoloDS KudumCaller call: ' + link;
+    const whatsappUrl = 'https://wa.me/?text=' + encodeURIComponent(message);
+    window.open(whatsappUrl, '_blank');
+}
+
+// ===== SHARE VIA EMAIL =====
+function shareViaEmail() {
+    const link = getRoomLink();
+    if (!link) return;
+    
+    const subject = 'Join my SoloDS KudumCaller call';
+    const body = 'Hi,\n\nJoin my voice call using this link:\n' + link + '\n\nIt works on any browser, no app needed!\n\n- SoloDS KudumCaller';
+    const emailUrl = 'mailto:?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(body);
+    window.location.href = emailUrl;
+}
+
+// ===== AUTO-JOIN FROM URL =====
+function checkUrlForRoom() {
+    const params = new URLSearchParams(window.location.search);
+    const roomId = params.get('room');
+    if (roomId) {
+        window.history.replaceState({}, '', window.location.pathname);
+        setTimeout(() => handleJoinRoom(roomId), 500);
+    }
+}
+
+// ===== EVENT HANDLERS =====
+async function handleCreateCall() {
+    try {
+        await ensureSocket();
+        await createRoom();
+        
+        dom.homeScreen.classList.add('hidden');
+        dom.callScreen.classList.remove('hidden');
+        dom.roomDisplay.textContent = state.roomId;
+        dom.participantStatus.textContent = 'Waiting for someone to join... 🔄';
+        
+        state.isInCall = true;
+        await initiateCall();
+        
+        updateLinkDisplay();
+        setTimeout(copyRoomLink, 1000);
+        
+    } catch (error) {
+        console.error('Create call error:', error);
+        showToast('Failed to create call', 'error');
+    }
+}
+
+async function handleJoinRoom(roomId) {
+    if (!roomId) {
+        roomId = dom.roomInput.value.trim();
+    }
+    
+    if (!roomId) {
+        showToast('Please enter a room code', 'error');
+        return;
+    }
+    
+    try {
+        await ensureSocket();
+        await joinRoom(roomId);
+        
+        dom.homeScreen.classList.add('hidden');
+        dom.callScreen.classList.remove('hidden');
+        dom.roomDisplay.textContent = roomId;
+        dom.participantStatus.textContent = 'Joining call... 📞';
+        
+        state.isInCall = true;
+        await initiateCall();
+        
+        updateLinkDisplay();
+        
+    } catch (error) {
+        console.error('Join room error:', error);
+        showToast(error.message || 'Failed to join room', 'error');
+    }
+}
+
+// ===== EVENT LISTENERS =====
+dom.createCallBtn.addEventListener('click', handleCreateCall);
+dom.joinCallBtn.addEventListener('click', () => handleJoinRoom());
+dom.roomInput.addEventListener('keypress', (e) => {
+    if (e.key === 'Enter') handleJoinRoom();
+});
+dom.endCallBtn.addEventListener('click', endCall);
+dom.muteBtn.addEventListener('click', toggleMute);
+dom.copyRoomBtn.addEventListener('click', copyRoomLink);
+dom.copyLinkBtn.addEventListener('click', copyRoomLink);
+
+dom.shareWhatsappBtn.addEventListener('click', shareViaWhatsApp);
+dom.shareSmsBtn.addEventListener('click', shareViaSMS);
+dom.shareEmailBtn.addEventListener('click', shareViaEmail);
+dom.shareCopyBtn.addEventListener('click', copyRoomLink);
+
+// ===== KEYBOARD SHORTCUTS =====
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && state.isInCall) {
+        endCall();
+    }
+    if (e.key === 'm' && state.isInCall) {
+        toggleMute();
+    }
+});
+
+// ===== INIT =====
+async function init() {
+    try {
+        await connectSocket();
+        hideLoading();
+        checkUrlForRoom();
+        
+        console.log('SoloDS KudumCaller initialized');
+        console.log('Share a URL to start a voice call!');
+        console.log('Server URL:', CONFIG.SERVER_URL);
+        
+    } catch (error) {
+        console.error('Init error:', error);
+        hideLoading();
+        showToast('Failed to connect to server. Please refresh.', 'error');
+    }
+}
+
+init();
