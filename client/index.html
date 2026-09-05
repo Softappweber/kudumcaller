@@ -19,6 +19,7 @@
     <div id="loading-screen">
         <div class="loader"></div>
         <p>Connecting to SoloDS Cloud...</p>
+        <p style="font-size: 11px; color: #6A6A82; margin-top: 8px;">🔒 Secured with Cloudflare TURN</p>
     </div>
 
     <!-- Main Container -->
@@ -41,7 +42,7 @@
                 <div class="hero">
                     <h1>Voice calls without<br><span class="gradient-text">phone numbers</span></h1>
                     <p class="subtitle">Share a link and talk instantly. No app installs needed.</p>
-                    <p class="subtitle-small">🔒 Powered by SoloDS Secure Network</p>
+                    <p class="subtitle-small">🔒 Powered by SoloDS Secure Network • Cloudflare TURN</p>
                 </div>
 
                 <div class="action-buttons">
@@ -99,7 +100,7 @@
                             <button id="share-whatsapp-btn" class="share-btn whatsapp">
                                 <span>💬</span> WhatsApp
                             </button>
-                            <button id="share-sms-btn" class="share-btn sms">
+                            <button id="share-sms-btn" class="share-btn sms mobile-only">
                                 <span>✉️</span> SMS
                             </button>
                             <button id="share-email-btn" class="share-btn email">
@@ -111,13 +112,33 @@
                         </div>
                     </div>
 
-                    <div class="call-status">
-                        <div id="connection-indicator" class="status-indicator connecting">
-                            <span class="pulse"></span>
-                            <span id="status-text">Connecting...</span>
+                    <!-- Incoming Call UI -->
+                    <div id="incoming-call" class="hidden">
+                        <div class="incoming-call-box">
+                            <div class="incoming-icon">📞</div>
+                            <div class="incoming-text">Incoming Call...</div>
+                            <div class="incoming-actions">
+                                <button id="accept-call-btn" class="incoming-btn accept">
+                                    <span>📞</span> Accept
+                                </button>
+                                <button id="decline-call-btn" class="incoming-btn decline">
+                                    <span>❌</span> Decline
+                                </button>
+                            </div>
                         </div>
                     </div>
 
+                    <!-- Call Status -->
+                    <div id="call-status-area">
+                        <div class="call-status">
+                            <div id="connection-indicator" class="status-indicator connecting">
+                                <span class="pulse"></span>
+                                <span id="status-text">Connecting...</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Call Controls -->
                     <div class="call-controls">
                         <button id="mute-btn" class="control-btn" title="Mute">
                             <span class="control-icon">🎤</span>
@@ -135,6 +156,7 @@
         <!-- Footer -->
         <footer>
             <p>© 2026 SoloDS Software • <span id="call-count">0</span> calls made</p>
+            <p style="font-size: 10px; color: #4A4A62;">🔒 Secured with Cloudflare TURN/STUN</p>
         </footer>
 
         <!-- Toast Notifications -->
