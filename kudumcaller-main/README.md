@@ -1,2 +1,0 @@
-# kudumcaller
-kudumcaller from soloDS.
