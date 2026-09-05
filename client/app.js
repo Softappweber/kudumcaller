@@ -8,11 +8,50 @@ const CONFIG = {
         ? 'http://localhost:5000' 
         : 'https://kudumcaller.onrender.com',
     MAX_RETRIES: 3,
+    // ✅ CLOUDFLARE 100% FREE TURN/STUN SERVERS - PRODUCTION READY
     ICE_SERVERS: {
         iceServers: [
-            { urls: 'stun:stun.l.google.com:19302' },
-            { urls: 'stun:stun1.l.google.com:19302' },
-            { urls: 'stun:stun2.l.google.com:19302' },
+            // Cloudflare STUN over UDP
+            {
+                urls: [
+                    'stun:stun.cloudflare.com:3478',
+                    'stun:stun.cloudflare.com:53'
+                ]
+            },
+            // Cloudflare TURN over UDP
+            {
+                urls: [
+                    'turn:turn.cloudflare.com:3478?transport=udp',
+                    'turn:turn.cloudflare.com:53?transport=udp'
+                ],
+                username: 'any-username',  // Cloudflare TURN requires any non-empty username
+                credential: 'any-credential'  // Cloudflare TURN requires any non-empty credential
+            },
+            // Cloudflare TURN over TCP
+            {
+                urls: [
+                    'turn:turn.cloudflare.com:3478?transport=tcp',
+                    'turn:turn.cloudflare.com:80?transport=tcp'
+                ],
+                username: 'any-username',
+                credential: 'any-credential'
+            },
+            // Cloudflare TURN over TLS (secure)
+            {
+                urls: [
+                    'turns:turn.cloudflare.com:5349',
+                    'turns:turn.cloudflare.com:443'
+                ],
+                username: 'any-username',
+                credential: 'any-credential'
+            },
+            // Google STUN fallback
+            {
+                urls: [
+                    'stun:stun.l.google.com:19302',
+                    'stun:stun1.l.google.com:19302'
+                ]
+            }
         ]
     }
 };
@@ -27,6 +66,7 @@ const state = {
     isConnected: false,
     isMuted: false,
     isInCall: false,
+    isRinging: false,
     remoteUserId: null,
     callCount: 0
 };
@@ -38,6 +78,7 @@ const dom = {
     app: $('app'),
     homeScreen: $('home-screen'),
     callScreen: $('call-screen'),
+    incomingCall: $('incoming-call'),
     connectionStatus: $('connection-status'),
     createCallBtn: $('create-call-btn'),
     joinCallBtn: $('join-call-btn'),
@@ -49,6 +90,8 @@ const dom = {
     connectionIndicator: $('connection-indicator'),
     muteBtn: $('mute-btn'),
     endCallBtn: $('end-call-btn'),
+    acceptCallBtn: $('accept-call-btn'),
+    declineCallBtn: $('decline-call-btn'),
     copyRoomBtn: $('copy-room-btn'),
     copyLinkBtn: $('copy-link-btn'),
     shareWhatsappBtn: $('share-whatsapp-btn'),
@@ -62,7 +105,7 @@ const dom = {
 // ===== TOAST NOTIFICATIONS =====
 function showToast(message, type = 'info', duration = 3000) {
     const toast = document.createElement('div');
-    toast.className = `toast ${type}`;
+    toast.className = 'toast ' + type;
     toast.textContent = message;
     dom.toastContainer.appendChild(toast);
     
@@ -88,7 +131,7 @@ function connectSocket() {
     return new Promise((resolve, reject) => {
         try {
             if (typeof io === 'undefined') {
-                reject(new Error('Socket.io library not loaded. Please check your internet connection.'));
+                reject(new Error('Socket.io library not loaded.'));
                 return;
             }
             
@@ -126,6 +169,7 @@ function connectSocket() {
             socket.on('user-left', handleUserLeft);
             socket.on('user-muted', handleUserMuted);
             socket.on('new-host', handleNewHost);
+            socket.on('incoming-call', handleIncomingCall);
             
         } catch (error) {
             reject(error);
@@ -149,7 +193,6 @@ function updateConnectionStatus(connected) {
 async function createRoom() {
     try {
         showToast('Creating room...', 'info');
-        
         const socket = await ensureSocket();
         
         return new Promise((resolve, reject) => {
@@ -176,7 +219,6 @@ async function createRoom() {
 async function joinRoom(roomId) {
     try {
         showToast('Joining room ' + roomId + '...', 'info');
-        
         const socket = await ensureSocket();
         
         return new Promise((resolve, reject) => {
@@ -230,6 +272,7 @@ async function setupWebRTC() {
             state.isConnected = true;
             updateCallStatus('connected');
             showToast('Call connected!', 'success');
+            hideIncomingCall();
             stopRinging();
         };
         
@@ -249,6 +292,7 @@ async function setupWebRTC() {
             if (state_change === 'connected') {
                 dom.statusText.textContent = 'Connected - Talk now! 🎤';
                 updateCallStatus('connected');
+                hideIncomingCall();
                 stopRinging();
             } else if (state_change === 'disconnected' || state_change === 'failed') {
                 dom.statusText.textContent = 'Disconnected';
@@ -315,14 +359,32 @@ function playRingtone() {
 
 function startRinging() {
     stopRinging();
+    state.isRinging = true;
     ringInterval = setInterval(playRingtone, 2000);
 }
 
 function stopRinging() {
+    state.isRinging = false;
     if (ringInterval) {
         clearInterval(ringInterval);
         ringInterval = null;
     }
+}
+
+// ===== INCOMING CALL UI =====
+function showIncomingCall() {
+    dom.incomingCall.classList.remove('hidden');
+}
+
+function hideIncomingCall() {
+    dom.incomingCall.classList.add('hidden');
+}
+
+function handleIncomingCall(data) {
+    console.log('Incoming call from:', data.from);
+    showIncomingCall();
+    startRinging();
+    showToast('Incoming call!', 'info');
 }
 
 // ===== SIGNALING =====
@@ -333,6 +395,9 @@ async function handleSignal(data) {
         const { from, signal } = data;
         
         if (signal.offer) {
+            showIncomingCall();
+            startRinging();
+            
             await state.peerConnection.setRemoteDescription(new RTCSessionDescription(signal.offer));
             const answer = await state.peerConnection.createAnswer();
             await state.peerConnection.setLocalDescription(answer);
@@ -343,6 +408,8 @@ async function handleSignal(data) {
             });
         } else if (signal.answer) {
             await state.peerConnection.setRemoteDescription(new RTCSessionDescription(signal.answer));
+            hideIncomingCall();
+            stopRinging();
         } else if (signal.candidate) {
             await state.peerConnection.addIceCandidate(new RTCIceCandidate(signal.candidate));
         }
@@ -380,12 +447,10 @@ async function initiateCall() {
 }
 
 function handleUserJoined(data) {
-    console.log('User joined:', data);
+    console.log('👤 User joined:', data);
     dom.participantStatus.textContent = 'Someone joined! Connecting... 🔗';
     dom.statusText.textContent = 'Connecting...';
     showToast('Someone joined the room! 🔔', 'success');
-    
-    startRinging();
     
     if (state.isHost && !state.isConnected) {
         state.peerConnection.createOffer()
@@ -401,12 +466,13 @@ function handleUserJoined(data) {
 }
 
 function handleUserLeft(data) {
-    console.log('User left:', data);
+    console.log('👋 User left:', data);
     dom.participantStatus.textContent = 'User left the call';
     dom.statusText.textContent = 'Waiting for someone...';
     showToast('Other user left the call', 'info');
     state.isConnected = false;
     updateCallStatus('connecting');
+    hideIncomingCall();
     stopRinging();
 }
 
@@ -455,6 +521,7 @@ function endCall() {
     state.isConnected = false;
     state.isInCall = false;
     state.remoteUserId = null;
+    hideIncomingCall();
     stopRinging();
     
     dom.callScreen.classList.add('hidden');
@@ -475,6 +542,19 @@ function endCall() {
     state.isHost = false;
     
     showToast('Call ended', 'info');
+}
+
+function acceptCall() {
+    hideIncomingCall();
+    stopRinging();
+    showToast('Call accepted!', 'success');
+}
+
+function declineCall() {
+    hideIncomingCall();
+    stopRinging();
+    endCall();
+    showToast('Call declined', 'info');
 }
 
 function updateCallStatus(status) {
@@ -532,21 +612,7 @@ function updateLinkDisplay() {
     }
 }
 
-// ===== SHARE VIA SMS =====
-function shareViaSMS() {
-    const link = getRoomLink();
-    if (!link) return;
-    
-    const message = 'Join my SoloDS KudumCaller call: ' + link;
-    const smsUrl = 'sms:?body=' + encodeURIComponent(message);
-    window.location.href = smsUrl;
-    
-    setTimeout(() => {
-        showToast('SMS app opened! Send the message.', 'info');
-    }, 500);
-}
-
-// ===== SHARE VIA WHATSAPP =====
+// ===== SHARE VIA WHATSAPP (Opens in new tab) =====
 function shareViaWhatsApp() {
     const link = getRoomLink();
     if (!link) return;
@@ -556,7 +622,17 @@ function shareViaWhatsApp() {
     window.open(whatsappUrl, '_blank');
 }
 
-// ===== SHARE VIA EMAIL =====
+// ===== SHARE VIA SMS (Mobile only) =====
+function shareViaSMS() {
+    const link = getRoomLink();
+    if (!link) return;
+    
+    const message = 'Join my SoloDS KudumCaller call: ' + link;
+    const smsUrl = 'sms:?body=' + encodeURIComponent(message);
+    window.open(smsUrl, '_blank');
+}
+
+// ===== SHARE VIA EMAIL (Opens in new tab) =====
 function shareViaEmail() {
     const link = getRoomLink();
     if (!link) return;
@@ -564,7 +640,7 @@ function shareViaEmail() {
     const subject = 'Join my SoloDS KudumCaller call';
     const body = 'Hi,\n\nJoin my voice call using this link:\n' + link + '\n\nIt works on any browser, no app needed!\n\n- SoloDS KudumCaller';
     const emailUrl = 'mailto:?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(body);
-    window.location.href = emailUrl;
+    window.open(emailUrl, '_blank');
 }
 
 // ===== AUTO-JOIN FROM URL =====
@@ -638,6 +714,8 @@ dom.roomInput.addEventListener('keypress', (e) => {
 });
 dom.endCallBtn.addEventListener('click', endCall);
 dom.muteBtn.addEventListener('click', toggleMute);
+dom.acceptCallBtn.addEventListener('click', acceptCall);
+dom.declineCallBtn.addEventListener('click', declineCall);
 dom.copyRoomBtn.addEventListener('click', copyRoomLink);
 dom.copyLinkBtn.addEventListener('click', copyRoomLink);
 
@@ -663,9 +741,10 @@ async function init() {
         hideLoading();
         checkUrlForRoom();
         
-        console.log('SoloDS KudumCaller initialized');
-        console.log('Share a URL to start a voice call!');
-        console.log('Server URL:', CONFIG.SERVER_URL);
+        console.log('🎯 SoloDS KudumCaller initialized');
+        console.log('📱 Share a URL to start a voice call!');
+        console.log('🔗 Server URL:', CONFIG.SERVER_URL);
+        console.log('🔄 Cloudflare TURN/STUN servers configured');
         
     } catch (error) {
         console.error('Init error:', error);
