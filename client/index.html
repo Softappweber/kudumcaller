@@ -16,14 +16,14 @@
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="application-name" content="KudumCaller">
 
-    <!-- ===== iOS PWA (Apple ignores manifest.json for some of this) ===== -->
+    <!-- ===== iOS PWA ===== -->
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="KudumCaller">
-    <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+    <link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='50' fill='%236C63FF'/%3E%3Ctext x='50' y='68' font-size='50' text-anchor='middle' fill='white' font-family='Arial'%3E📞%3C/text%3E%3C/svg%3E">
 
     <!-- ===== FAVICON ===== -->
-    <link rel="icon" type="image/png" href="icons/favicon.png">
+    <link rel="icon" type="image/png" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='50' fill='%236C63FF'/%3E%3Ctext x='50' y='68' font-size='50' text-anchor='middle' fill='white' font-family='Arial'%3E📞%3C/text%3E%3C/svg%3E">
 
     <!-- Socket.io from CDN - REQUIRED -->
     <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
@@ -38,7 +38,7 @@
         <p style="font-size: 11px; color: #6A6A82; margin-top: 8px;">🔒 Secured with Cloudflare TURN</p>
     </div>
 
-    <!-- ===== ROTATE DEVICE OVERLAY (mobile landscape only) ===== -->
+    <!-- ===== ROTATE DEVICE OVERLAY ===== -->
     <div id="rotate-overlay" class="hidden">
         <div class="rotate-icon">📱</div>
         <p>KudumCaller works best in portrait mode.<br>Please rotate your device.</p>
@@ -58,11 +58,18 @@
             </div>
         </header>
 
-        <!-- ===== INSTALL APP BANNER (mobile only, shown when installable) ===== -->
+        <!-- ===== INSTALL BANNER (Shows when PWA installable) ===== -->
         <div id="install-banner" class="hidden mobile-only">
-            <span>📲 Install KudumCaller for ringtones &amp; one-tap calling</span>
+            <span>📲 Install KudumCaller for ringtones & one-tap calling</span>
             <button id="install-btn" class="btn-mini">Install</button>
             <button id="dismiss-install-btn" class="btn-icon-only" title="Dismiss">✕</button>
+        </div>
+
+        <!-- ===== FIXED: ALWAYS VISIBLE INSTALL BUTTON (Will auto-hide when installed) ===== -->
+        <div id="install-btn-container" class="install-container" style="display: none;">
+            <button id="install-app-btn" class="btn btn-primary" style="width: 100%;">
+                📲 Install KudumCaller App
+            </button>
         </div>
 
         <!-- ===== UPDATE AVAILABLE BANNER ===== -->
@@ -70,10 +77,7 @@
             <span>🔄 A new version is available</span>
             <button id="update-btn" class="btn-mini">Refresh</button>
         </div>
-<!-- Add this inside <body> after <div id="app"> -->
-<button id="install-btn" style="display: none; position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: #6C63FF; color: white; padding: 12px 24px; border: none; border-radius: 12px; font-size: 16px; cursor: pointer; z-index: 9999; box-shadow: 0 10px 30px rgba(108, 99, 255, 0.4);">
-    📲 Install App
-</button>
+
         <!-- ===== MAIN CONTENT ===== -->
         <main>
 
@@ -110,7 +114,7 @@
                     </div>
                     <div class="feature">
                         <span class="feature-icon">🔒</span>
-                        <span>Private &amp; encrypted</span>
+                        <span>Private & encrypted</span>
                     </div>
                 </div>
 
