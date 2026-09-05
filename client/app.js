@@ -1,13 +1,11 @@
 // =====================================================
 // SOLODS KUDUMCALLER - Complete WebRTC Voice Calling App
-// Platform-aware: desktop gets keyboard shortcuts + network
-// diagnostics, mobile gets install/ringtone/vibration/wake-lock.
 // =====================================================
 
 // ===== CONFIGURATION =====
 const CONFIG = {
-    SERVER_URL: window.location.hostname === 'localhost'
-        ? 'http://localhost:5000'
+    SERVER_URL: window.location.hostname === 'localhost' 
+        ? 'http://localhost:5000' 
         : 'https://kudumcaller.onrender.com',
     MAX_RETRIES: 3,
     ICE_SERVERS: {
@@ -29,35 +27,6 @@ const CONFIG = {
     }
 };
 
-// ===== PLATFORM DETECTION =====
-// Capability-based, not just screen width - a touch laptop should still
-// get desktop treatment (keyboard shortcuts, network diagnostics), while
-// an iPad (which reports as "Mac" in its UA since iPadOS 13) should get
-// mobile treatment (ringtone, wake lock, vibration).
-function detectIsMobile() {
-    const ua = navigator.userAgent || '';
-    const isMobileUA = /Android|iPhone|iPod|Mobile|Windows Phone/i.test(ua);
-    const isIPad = /iPad/i.test(ua) || (ua.includes('Macintosh') && navigator.maxTouchPoints > 1);
-    const isCoarsePointerSmallScreen = window.matchMedia('(pointer: coarse)').matches && window.innerWidth <= 900;
-    return isMobileUA || isIPad || isCoarsePointerSmallScreen;
-}
-
-function isStandaloneDisplay() {
-    return window.matchMedia('(display-mode: standalone)').matches ||
-        window.matchMedia('(display-mode: fullscreen)').matches ||
-        window.navigator.standalone === true; // legacy iOS Safari flag
-}
-
-const isMobile = detectIsMobile();
-
-function applyPlatformClasses() {
-    const html = document.documentElement;
-    html.classList.toggle('platform-mobile', isMobile);
-    html.classList.toggle('platform-desktop', !isMobile);
-    html.classList.toggle('standalone', isStandaloneDisplay());
-}
-applyPlatformClasses();
-
 // ===== STATE =====
 const state = {
     socket: null,
@@ -72,21 +41,16 @@ const state = {
     isCaller: false,
     isReceiver: false,
     pendingOffer: null,
+    pendingCandidates: [],
     isRinging: false,
-    wakeLock: null,
-    remoteAudio: null
+    platform: 'desktop'
 };
-
-let swRegistration = null;
-let deferredInstallPrompt = null;
-let statsIntervalId = null;
 
 // ===== DOM REFS =====
 const $ = (id) => document.getElementById(id);
 const dom = {
     loading: $('loading-screen'),
     app: $('app'),
-    rotateOverlay: $('rotate-overlay'),
     homeScreen: $('home-screen'),
     callScreen: $('call-screen'),
     incomingCall: $('incoming-call'),
@@ -111,18 +75,17 @@ const dom = {
     shareCopyBtn: $('share-copy-btn'),
     toastContainer: $('toast-container'),
     callCount: $('call-count'),
-    installBanner: $('install-banner'),
-    installBtn: $('install-btn'),
-    dismissInstallBtn: $('dismiss-install-btn'),
-    updateBanner: $('update-banner'),
-    updateBtn: $('update-btn'),
-    networkInfo: $('network-info'),
-    toggleNetworkInfoBtn: $('toggle-network-info-btn'),
-    netCandidateType: $('net-candidate-type'),
-    netRtt: $('net-rtt'),
-    netCodec: $('net-codec'),
-    netPacketLoss: $('net-packet-loss')
+    installBtn: $('install-btn')
 };
+
+// ===== PLATFORM DETECTION =====
+function detectPlatform() {
+    const isMobile = /Android|iPhone|iPad|iPod|BlackBerry|Windows Phone/i.test(navigator.userAgent);
+    const isTablet = /iPad|Android(?!.*Mobile)/i.test(navigator.userAgent);
+    state.platform = (isMobile || isTablet) ? 'mobile' : 'desktop';
+    console.log('Platform:', state.platform);
+    return state.platform;
+}
 
 // ===== TOAST =====
 function showToast(msg, type = 'info', duration = 3000) {
@@ -257,57 +220,6 @@ async function ensureSocket() {
     return await connectSocket();
 }
 
-// ===== REMOTE AUDIO PLAYBACK =====
-// Two bugs this fixes vs. a bare `new Audio()` in ontrack:
-// 1. An audio element with no reference held anywhere and never added to
-//    the DOM can be garbage-collected mid-call in some browsers, silently
-//    killing playback. We keep it on `state` and append it (hidden).
-// 2. If the browser's autoplay policy blocks .play() (common when the
-//    remote track arrives after an async signaling round-trip, so the
-//    browser no longer associates it with your "Join" tap), the call
-//    still shows "Connected" - because that status comes from the
-//    WebRTC connection state, not from whether audio is actually
-//    playing. Previously that failure only went to console.warn, so you
-//    saw "Connected" with total silence and no idea why. Now we tell you
-//    and retry on your very next tap/click.
-function attachRemoteAudio(stream) {
-    if (!state.remoteAudio) {
-        state.remoteAudio = document.createElement('audio');
-        state.remoteAudio.id = 'remote-audio';
-        state.remoteAudio.autoplay = true;
-        state.remoteAudio.playsInline = true; // required for iOS Safari
-        state.remoteAudio.style.display = 'none';
-        document.body.appendChild(state.remoteAudio);
-    }
-    state.remoteAudio.srcObject = stream;
-    state.remoteAudio.muted = false;
-    state.remoteAudio.volume = 1;
-
-    const tryPlay = () => state.remoteAudio.play();
-
-    tryPlay().catch((err) => {
-        console.warn('Remote audio autoplay blocked:', err.name, err.message);
-        showToast('Tap anywhere to enable call audio', 'error', 6000);
-
-        const retryOnGesture = () => {
-            tryPlay()
-                .then(() => showToast('Audio enabled', 'success'))
-                .catch((e) => console.warn('Retry play failed:', e));
-        };
-        document.addEventListener('click', retryOnGesture, { once: true });
-        document.addEventListener('touchstart', retryOnGesture, { once: true });
-    });
-}
-
-function detachRemoteAudio() {
-    if (state.remoteAudio) {
-        state.remoteAudio.pause();
-        state.remoteAudio.srcObject = null;
-        state.remoteAudio.remove();
-        state.remoteAudio = null;
-    }
-}
-
 // ===== WEBRTC =====
 async function setupWebRTC() {
     try {
@@ -319,15 +231,15 @@ async function setupWebRTC() {
             state.peerConnection.addTrack(track, state.localStream);
         });
         state.peerConnection.ontrack = (event) => {
-            attachRemoteAudio(event.streams[0]);
-            dom.statusText.textContent = 'Connected - Talk now!';
+            const remoteAudio = new Audio();
+            remoteAudio.srcObject = event.streams[0];
+            remoteAudio.play().catch(err => console.warn('Autoplay:', err));
+            dom.statusText.textContent = 'Connected - Talk now! 🎤';
             state.isConnected = true;
             updateCallStatus('connected');
             showToast('Call connected!', 'success');
             dom.incomingCall.classList.add('hidden');
             stopRinging();
-            acquireWakeLock();
-            startNetworkStats();
         };
         state.peerConnection.onicecandidate = (event) => {
             if (event.candidate && state.socket && state.roomId) {
@@ -341,17 +253,14 @@ async function setupWebRTC() {
             const s = state.peerConnection.connectionState;
             console.log('Connection state:', s);
             if (s === 'connected') {
-                dom.statusText.textContent = 'Connected - Talk now!';
+                dom.statusText.textContent = 'Connected - Talk now! 🎤';
                 updateCallStatus('connected');
                 dom.incomingCall.classList.add('hidden');
                 stopRinging();
-                acquireWakeLock();
-                startNetworkStats();
             } else if (s === 'disconnected' || s === 'failed') {
                 dom.statusText.textContent = 'Disconnected';
                 updateCallStatus('disconnected');
                 showToast('Call disconnected', 'error');
-                stopNetworkStats();
             }
         };
         return true;
@@ -362,89 +271,61 @@ async function setupWebRTC() {
     }
 }
 
-// ===== RINGTONE (Web Audio API - classic two-tone ring cadence) =====
-// Using Web Audio oscillators instead of a static audio file means the
-// ringtone works offline, needs no asset to host/cache, and loops
-// reliably (HTMLAudioElement looping short clips is a common source of
-// mobile audio glitches). The 440Hz + 480Hz pair matches the classic
-// North American ring tone; cadence is ~2s on / 4s off.
-let vibrateIntervalId = null;
+// ===== RINGTONE =====
+let ringInterval = null;
+let ringtoneAudio = null;
 
-function getSharedAudioContext() {
-    if (!window.audioContext) {
-        try {
-            window.audioContext = new (window.AudioContext || window.webkitAudioContext)();
-        } catch (e) {
-            console.warn('AudioContext unavailable:', e);
-            return null;
-        }
-    }
-    if (window.audioContext.state === 'suspended') {
-        window.audioContext.resume().catch(() => {});
-    }
-    return window.audioContext;
-}
-
-function playRingBurst() {
-    const ctx = getSharedAudioContext();
-    if (!ctx) return;
+function playRingtone() {
+    if (!window.userInteracted) return;
     try {
-        const now = ctx.currentTime;
-        [440, 480].forEach((freq) => {
+        if (!ringtoneAudio) {
+            ringtoneAudio = new Audio('data:audio/wav;base64,UklGRnoAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoAAACBhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqF');
+            ringtoneAudio.volume = 0.5;
+            ringtoneAudio.loop = true;
+        }
+        ringtoneAudio.play().catch(() => {
+            const ctx = new (window.AudioContext || window.webkitAudioContext)();
+            if (ctx.state === 'suspended') ctx.resume();
             const osc = ctx.createOscillator();
             const gain = ctx.createGain();
-            osc.frequency.value = freq;
-            osc.type = 'sine';
-            gain.gain.setValueAtTime(0.0001, now);
-            gain.gain.linearRampToValueAtTime(0.22, now + 0.05);
-            gain.gain.setValueAtTime(0.22, now + 1.9);
-            gain.gain.linearRampToValueAtTime(0.0001, now + 2.0);
-            osc.connect(gain).connect(ctx.destination);
-            osc.start(now);
-            osc.stop(now + 2.05);
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+            osc.frequency.value = 800;
+            osc.type = 'square';
+            gain.gain.value = 0.2;
+            osc.start();
+            setTimeout(() => osc.stop(), 300);
         });
-    } catch (e) {
-        console.warn('Ringtone burst failed:', e);
-    }
+    } catch (e) { console.warn('Ringtone:', e); }
 }
 
 function startRinging() {
     stopRinging();
     state.isRinging = true;
-    playRingBurst();
-    ringInterval = setInterval(playRingBurst, 4000);
-
-    // Vibration is mobile-only per spec, and only supported on Android
-    // (iOS Safari does not implement the Vibration API).
-    if (isMobile && navigator.vibrate) {
-        const pattern = [700, 500, 700, 500];
-        navigator.vibrate(pattern);
-        vibrateIntervalId = setInterval(() => navigator.vibrate(pattern), 4000);
-    }
+    ringInterval = setInterval(playRingtone, 2000);
 }
-let ringInterval = null;
 
 function stopRinging() {
     state.isRinging = false;
     if (ringInterval) { clearInterval(ringInterval); ringInterval = null; }
-    if (vibrateIntervalId) { clearInterval(vibrateIntervalId); vibrateIntervalId = null; }
-    if (navigator.vibrate) navigator.vibrate(0);
+    if (ringtoneAudio) { ringtoneAudio.pause(); ringtoneAudio.currentTime = 0; }
 }
 
 // ===== CALL EVENTS =====
 function handleIncomingCall(data) {
     console.log('Incoming call from:', data.from);
-    dom.incomingCall.classList.remove('hidden');
-    dom.participantStatus.textContent = 'Incoming call...';
-    dom.statusText.textContent = 'Tap Accept to answer';
-    startRinging();
-    notifyIncomingCallIfBackgrounded();
-    showToast('Incoming call!', 'info');
+    if (state.isReceiver) {
+        dom.incomingCall.classList.remove('hidden');
+        dom.participantStatus.textContent = 'Incoming call... 📞';
+        dom.statusText.textContent = 'Tap Accept to answer';
+        if (window.userInteracted) startRinging();
+        showToast('Incoming call!', 'info');
+    }
 }
 
 function handleCallConnected(data) {
     console.log('Call connected:', data);
-    dom.statusText.textContent = 'Connected - Talk now!';
+    dom.statusText.textContent = 'Connected - Talk now! 🎤';
     updateCallStatus('connected');
     dom.incomingCall.classList.add('hidden');
     stopRinging();
@@ -462,25 +343,37 @@ async function handleSignal(data) {
     if (!state.peerConnection) return;
     try {
         const { signal } = data;
+        
         if (signal.offer) {
-            // RECEIVER: Show incoming call
-            dom.incomingCall.classList.remove('hidden');
-            dom.participantStatus.textContent = 'Incoming call...';
-            dom.statusText.textContent = 'Tap Accept to answer';
+            console.log('Received offer');
             state.pendingOffer = signal.offer;
-            startRinging();
-            notifyIncomingCallIfBackgrounded();
+            
+            if (state.isReceiver) {
+                dom.incomingCall.classList.remove('hidden');
+                dom.participantStatus.textContent = 'Incoming call... 📞';
+                dom.statusText.textContent = 'Tap Accept to answer';
+                if (window.userInteracted) startRinging();
+                showToast('Incoming call!', 'info');
+            }
+            
         } else if (signal.answer) {
-            // CALLER: Call is answered
+            console.log('Received answer');
             await state.peerConnection.setRemoteDescription(new RTCSessionDescription(signal.answer));
             dom.incomingCall.classList.add('hidden');
             stopRinging();
-            dom.statusText.textContent = 'Connected - Talk now!';
+            dom.statusText.textContent = 'Connected - Talk now! 🎤';
             updateCallStatus('connected');
             state.isConnected = true;
             showToast('Call connected!', 'success');
+            
         } else if (signal.candidate) {
-            await state.peerConnection.addIceCandidate(new RTCIceCandidate(signal.candidate));
+            console.log('Received candidate');
+            if (state.peerConnection.remoteDescription) {
+                await state.peerConnection.addIceCandidate(new RTCIceCandidate(signal.candidate));
+            } else {
+                if (!state.pendingCandidates) state.pendingCandidates = [];
+                state.pendingCandidates.push(signal.candidate);
+            }
         }
     } catch (error) {
         console.error('Signal error:', error);
@@ -490,11 +383,9 @@ async function handleSignal(data) {
 // ===== USER EVENTS =====
 function handleUserJoined(data) {
     console.log('User joined:', data);
-    // CALLER: Someone joined, show "Calling..."
     if (state.isCaller) {
-        dom.participantStatus.textContent = 'Calling...';
+        dom.participantStatus.textContent = 'Calling... 📞';
         dom.statusText.textContent = 'Ringing...';
-        // Send offer
         state.peerConnection.createOffer()
             .then(offer => state.peerConnection.setLocalDescription(offer))
             .then(() => {
@@ -504,7 +395,7 @@ function handleUserJoined(data) {
                 });
             })
             .catch(console.error);
-        startRinging();
+        if (window.userInteracted) startRinging();
     }
 }
 
@@ -517,7 +408,6 @@ function handleUserLeft(data) {
     updateCallStatus('connecting');
     dom.incomingCall.classList.add('hidden');
     stopRinging();
-    stopNetworkStats();
 }
 
 function handleUserMuted(data) {
@@ -547,14 +437,12 @@ function toggleMute() {
 function endCall() {
     if (state.peerConnection) { state.peerConnection.close(); state.peerConnection = null; }
     if (state.localStream) { state.localStream.getTracks().forEach(t => t.stop()); state.localStream = null; }
-    detachRemoteAudio();
     state.isConnected = false;
     state.isInCall = false;
     state.pendingOffer = null;
+    state.pendingCandidates = [];
     dom.incomingCall.classList.add('hidden');
     stopRinging();
-    stopNetworkStats();
-    releaseWakeLock();
     dom.callScreen.classList.add('hidden');
     dom.homeScreen.classList.remove('hidden');
     dom.statusText.textContent = 'Ready';
@@ -575,18 +463,26 @@ function endCall() {
 }
 
 function acceptCall() {
-    // RECEIVER: Accept the call
     window.userInteracted = true;
     dom.incomingCall.classList.add('hidden');
     stopRinging();
     dom.statusText.textContent = 'Connecting...';
     updateCallStatus('connecting');
-    dom.participantStatus.textContent = 'Connecting...';
+    dom.participantStatus.textContent = 'Connecting... 🔗';
     showToast('Call accepted!', 'success');
-
+    
     if (state.pendingOffer) {
         state.peerConnection.setRemoteDescription(new RTCSessionDescription(state.pendingOffer))
-            .then(() => state.peerConnection.createAnswer())
+            .then(() => {
+                if (state.pendingCandidates && state.pendingCandidates.length > 0) {
+                    state.pendingCandidates.forEach(candidate => {
+                        state.peerConnection.addIceCandidate(new RTCIceCandidate(candidate))
+                            .catch(console.error);
+                    });
+                    state.pendingCandidates = [];
+                }
+                return state.peerConnection.createAnswer();
+            })
             .then(answer => state.peerConnection.setLocalDescription(answer))
             .then(() => {
                 state.socket.emit('signal', {
@@ -594,7 +490,6 @@ function acceptCall() {
                     signal: { answer: state.peerConnection.localDescription }
                 });
                 state.pendingOffer = null;
-                // Notify server call was accepted
                 state.socket.emit('call-accepted', { roomId: state.roomId });
             })
             .catch(console.error);
@@ -605,6 +500,7 @@ function declineCall() {
     dom.incomingCall.classList.add('hidden');
     stopRinging();
     state.pendingOffer = null;
+    state.pendingCandidates = [];
     if (state.socket && state.roomId) {
         state.socket.emit('call-declined', { roomId: state.roomId });
     }
@@ -616,239 +512,13 @@ function updateCallStatus(status) {
     const indicator = dom.connectionIndicator;
     const text = dom.statusText;
     indicator.className = 'status-indicator';
-    switch (status) {
+    switch(status) {
         case 'connecting': indicator.classList.add('connecting'); text.textContent = 'Connecting...'; break;
-        case 'connected': indicator.classList.add('connected'); text.textContent = 'Connected - Talk now!'; break;
+        case 'connected': indicator.classList.add('connected'); text.textContent = 'Connected - Talk now! 🎤'; break;
         case 'disconnected': indicator.classList.add('disconnected'); text.textContent = 'Disconnected'; break;
         default: text.textContent = 'Ready';
     }
 }
-
-// ===== SCREEN WAKE LOCK (mobile only) =====
-// Keeps the screen on during a call so the call doesn't drop when the
-// phone auto-locks. Desktop machines don't sleep mid-call the same way,
-// so this is gated to mobile per spec.
-async function acquireWakeLock() {
-    if (!isMobile || !('wakeLock' in navigator) || state.wakeLock) return;
-    try {
-        state.wakeLock = await navigator.wakeLock.request('screen');
-        state.wakeLock.addEventListener('release', () => {
-            console.log('Wake lock released');
-        });
-        console.log('Wake lock acquired');
-    } catch (err) {
-        console.warn('Wake lock request failed:', err);
-    }
-}
-
-function releaseWakeLock() {
-    if (state.wakeLock) {
-        state.wakeLock.release().catch(() => {});
-        state.wakeLock = null;
-    }
-}
-
-// Wake locks are automatically released when a tab is backgrounded;
-// re-acquire when the user returns to an active call.
-document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible' && state.isInCall && isMobile) {
-        acquireWakeLock();
-    }
-});
-
-// ===== NETWORK DIAGNOSTICS (desktop only) =====
-function startNetworkStats() {
-    if (isMobile || !state.peerConnection || statsIntervalId) return;
-    dom.toggleNetworkInfoBtn?.classList.remove('hidden');
-    updateNetworkStats();
-    statsIntervalId = setInterval(updateNetworkStats, 2000);
-}
-
-function stopNetworkStats() {
-    if (statsIntervalId) { clearInterval(statsIntervalId); statsIntervalId = null; }
-    dom.toggleNetworkInfoBtn?.classList.add('hidden');
-    dom.networkInfo?.classList.add('hidden');
-    if (dom.toggleNetworkInfoBtn) dom.toggleNetworkInfoBtn.textContent = 'Show network details';
-}
-
-async function updateNetworkStats() {
-    if (!state.peerConnection) return;
-    try {
-        const reports = await state.peerConnection.getStats();
-        let selectedPairId = null;
-        let candidateType = '-', rtt = '-', codec = '-', packetsLost = '-';
-
-        reports.forEach((report) => {
-            if (report.type === 'transport' && report.selectedCandidatePairId) {
-                selectedPairId = report.selectedCandidatePairId;
-            }
-            if (report.type === 'candidate-pair' && (report.selected || report.nominated) && !selectedPairId) {
-                selectedPairId = report.id;
-            }
-            if (report.type === 'inbound-rtp' && report.kind === 'audio' && report.packetsLost !== undefined) {
-                packetsLost = String(report.packetsLost);
-            }
-            if (report.type === 'codec' && report.mimeType && report.mimeType.startsWith('audio')) {
-                codec = report.mimeType.replace('audio/', '');
-            }
-        });
-
-        if (selectedPairId) {
-            const pair = reports.get(selectedPairId);
-            if (pair) {
-                if (pair.currentRoundTripTime !== undefined) {
-                    rtt = Math.round(pair.currentRoundTripTime * 1000) + ' ms';
-                }
-                const localCandidate = reports.get(pair.localCandidateId);
-                if (localCandidate && localCandidate.candidateType) {
-                    candidateType = localCandidate.candidateType === 'relay' ? 'relay (TURN)' : localCandidate.candidateType;
-                }
-            }
-        }
-
-        if (dom.netCandidateType) dom.netCandidateType.textContent = candidateType;
-        if (dom.netRtt) dom.netRtt.textContent = rtt;
-        if (dom.netCodec) dom.netCodec.textContent = codec;
-        if (dom.netPacketLoss) dom.netPacketLoss.textContent = packetsLost;
-    } catch (err) {
-        console.warn('getStats failed:', err);
-    }
-}
-
-dom.toggleNetworkInfoBtn?.addEventListener('click', () => {
-    const willShow = dom.networkInfo.classList.contains('hidden');
-    dom.networkInfo.classList.toggle('hidden', !willShow);
-    dom.toggleNetworkInfoBtn.textContent = willShow ? 'Hide network details' : 'Show network details';
-});
-
-// ===== NOTIFICATIONS FOR BACKGROUNDED TAB (mobile only) =====
-// This covers the case where the PWA tab is open but backgrounded (user
-// switched apps). It relies on the socket connection staying alive, so
-// it does NOT cover the fully-closed-app case - true "app is closed and
-// still rings" behavior needs the Web Push protocol: VAPID keys, a
-// subscription endpoint on the Render backend, and the `web-push` npm
-// package to send payloads server-side. The service worker's 'push'
-// handler is already wired up and ready for that; this function is the
-// interim best-effort while the app/tab is merely backgrounded.
-async function requestNotificationPermission() {
-    if (!isMobile || !('Notification' in window)) return;
-    if (Notification.permission === 'default') {
-        try { await Notification.requestPermission(); } catch (e) { /* ignore */ }
-    }
-}
-
-function notifyIncomingCallIfBackgrounded() {
-    if (!isMobile) return;
-    if (document.visibilityState !== 'hidden') return;
-    if (!('Notification' in window) || Notification.permission !== 'granted') return;
-    if (!swRegistration) return;
-    swRegistration.showNotification('📞 Incoming Call', {
-        body: 'Someone is calling you on KudumCaller',
-        icon: 'icons/icon-192.png',
-        badge: 'icons/icon-192.png',
-        vibrate: [300, 150, 300, 150, 300],
-        tag: 'kudumcaller-incoming-call',
-        renotify: true,
-        requireInteraction: true
-    }).catch((err) => console.warn('showNotification failed:', err));
-}
-
-// ===== SERVICE WORKER (install, offline cache, update flow) =====
-function registerServiceWorker() {
-    if (!('serviceWorker' in navigator)) return;
-    window.addEventListener('load', async () => {
-        try {
-            swRegistration = await navigator.serviceWorker.register('service-worker.js');
-            swRegistration.addEventListener('updatefound', () => {
-                const newWorker = swRegistration.installing;
-                if (!newWorker) return;
-                newWorker.addEventListener('statechange', () => {
-                    if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
-                        dom.updateBanner?.classList.remove('hidden');
-                    }
-                });
-            });
-        } catch (err) {
-            console.warn('Service worker registration failed:', err);
-        }
-    });
-
-    let hasReloaded = false;
-    navigator.serviceWorker.addEventListener('controllerchange', () => {
-        if (hasReloaded) return;
-        hasReloaded = true;
-        window.location.reload();
-    });
-
-    navigator.serviceWorker.addEventListener('message', (event) => {
-        if (event.data && event.data.type === 'notification-action') {
-            if (event.data.action === 'accept') acceptCall();
-            else if (event.data.action === 'decline') declineCall();
-        }
-    });
-}
-
-dom.updateBtn?.addEventListener('click', () => {
-    if (swRegistration && swRegistration.waiting) {
-        swRegistration.waiting.postMessage('SKIP_WAITING');
-    } else {
-        window.location.reload();
-    }
-});
-
-// ===== INSTALL PROMPT (mobile only, per spec - desktop is not installable) =====
-window.addEventListener('beforeinstallprompt', (e) => {
-    e.preventDefault();
-    deferredInstallPrompt = e;
-    if (isMobile && !isStandaloneDisplay() && !sessionStorage.getItem('kudumcaller-install-dismissed')) {
-        dom.installBanner?.classList.remove('hidden');
-    }
-});
-
-dom.installBtn?.addEventListener('click', async () => {
-    dom.installBanner?.classList.add('hidden');
-    if (!deferredInstallPrompt) return;
-    deferredInstallPrompt.prompt();
-    await deferredInstallPrompt.userChoice;
-    deferredInstallPrompt = null;
-});
-
-dom.dismissInstallBtn?.addEventListener('click', () => {
-    dom.installBanner?.classList.add('hidden');
-    sessionStorage.setItem('kudumcaller-install-dismissed', '1');
-});
-
-window.addEventListener('appinstalled', () => {
-    dom.installBanner?.classList.add('hidden');
-    showToast('KudumCaller installed!', 'success');
-});
-
-// ===== ORIENTATION (mobile only - portrait preferred) =====
-async function lockPortraitOrientation() {
-    if (!isMobile) return;
-    try {
-        if (screen.orientation && typeof screen.orientation.lock === 'function') {
-            await screen.orientation.lock('portrait-primary');
-        }
-    } catch (err) {
-        // Orientation lock only works in fullscreen/installed contexts on
-        // most browsers - this is expected to fail in a regular browser
-        // tab, so the rotate-overlay below is the real fallback.
-        console.log('Orientation lock unavailable (expected outside installed PWA):', err.message);
-    }
-}
-
-function checkOrientationOverlay() {
-    if (!isMobile || !dom.rotateOverlay) return;
-    const isLandscape = window.matchMedia('(orientation: landscape)').matches;
-    dom.rotateOverlay.classList.toggle('hidden', !isLandscape);
-}
-window.addEventListener('resize', checkOrientationOverlay);
-window.addEventListener('orientationchange', checkOrientationOverlay);
-
-// ===== ONLINE / OFFLINE =====
-window.addEventListener('online', () => showToast('Back online', 'success'));
-window.addEventListener('offline', () => showToast('You\u2019re offline - calls may drop', 'error'));
 
 // ===== SHARE =====
 function getRoomLink() {
@@ -905,19 +575,44 @@ function checkUrlForRoom() {
     }
 }
 
+// ===== PWA INSTALL BANNER =====
+let deferredPrompt;
+
+window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();
+    deferredPrompt = e;
+    if (dom.installBtn) {
+        dom.installBtn.style.display = 'block';
+        dom.installBtn.onclick = () => {
+            deferredPrompt.prompt();
+            deferredPrompt.userChoice.then((choiceResult) => {
+                if (choiceResult.outcome === 'accepted') {
+                    console.log('PWA installed');
+                }
+                deferredPrompt = null;
+                dom.installBtn.style.display = 'none';
+            });
+        };
+    }
+});
+
+window.addEventListener('appinstalled', () => {
+    console.log('PWA installed');
+    if (dom.installBtn) dom.installBtn.style.display = 'none';
+});
+
 // ===== EVENT HANDLERS =====
 async function handleCreateCall() {
     try {
         if (!window.userInteracted) {
             showToast('Tap the screen to enable audio', 'info');
         }
-        requestNotificationPermission();
         await ensureSocket();
         await createRoom();
         dom.homeScreen.classList.add('hidden');
         dom.callScreen.classList.remove('hidden');
         dom.roomDisplay.textContent = state.roomId;
-        dom.participantStatus.textContent = 'Waiting for someone to join...';
+        dom.participantStatus.textContent = 'Waiting for someone to join... 🔄';
         state.isInCall = true;
         await setupWebRTC();
         updateLinkDisplay();
@@ -940,13 +635,12 @@ async function handleJoinRoom(roomId) {
         if (!window.userInteracted) {
             showToast('Tap the screen to enable audio', 'info');
         }
-        requestNotificationPermission();
         await ensureSocket();
         await joinRoom(roomId);
         dom.homeScreen.classList.add('hidden');
         dom.callScreen.classList.remove('hidden');
         dom.roomDisplay.textContent = roomId;
-        dom.participantStatus.textContent = 'Joining call...';
+        dom.participantStatus.textContent = 'Joining call... 📞';
         state.isInCall = true;
         await setupWebRTC();
         updateLinkDisplay();
@@ -960,7 +654,17 @@ function enableAudioOnInteraction() {
     if (window.userInteracted) return;
     window.userInteracted = true;
     console.log('Audio enabled');
-    getSharedAudioContext();
+    try {
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        gain.gain.value = 0.001;
+        osc.start();
+        osc.stop(ctx.currentTime + 0.1);
+        window.audioContext = ctx;
+    } catch (e) { console.warn('Audio unlock:', e); }
 }
 
 // ===== EVENT LISTENERS =====
@@ -981,27 +685,20 @@ dom.shareCopyBtn.addEventListener('click', copyRoomLink);
 document.addEventListener('click', enableAudioOnInteraction);
 document.addEventListener('touchstart', enableAudioOnInteraction);
 
-// Keyboard shortcuts: desktop only, per platform spec (mobile browsers
-// rarely have a physical keyboard attached, and binding these globally
-// risks intercepting Enter/Escape from mobile virtual keyboards).
-if (!isMobile) {
-    document.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape' && state.isInCall) endCall();
-        if ((e.key === 'm' || e.key === 'M') && state.isInCall) toggleMute();
-    });
-}
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && state.isInCall) endCall();
+    if (e.key === 'm' && state.isInCall) toggleMute();
+});
 
 // ===== INIT =====
 async function init() {
-    registerServiceWorker();
-    checkOrientationOverlay();
-    lockPortraitOrientation();
     try {
+        detectPlatform();
         await connectSocket();
         hideLoading();
         checkUrlForRoom();
         console.log('SoloDS KudumCaller initialized');
-        console.log('Platform:', isMobile ? 'mobile' : 'desktop');
+        console.log('Platform:', state.platform);
         console.log('Server:', CONFIG.SERVER_URL);
         console.log('Tap screen to enable audio on mobile');
     } catch (error) {
