@@ -1,5 +1,5 @@
 // =====================================================
-// KUDUMCALLER - Complete WebRTC Voice Calling App
+// SOLODS KUDUMCALLER - Complete WebRTC Voice Calling App
 // =====================================================
 
 // ===== CONFIGURATION =====
@@ -28,7 +28,7 @@ const state = {
     isMuted: false,
     isInCall: false,
     remoteUserId: null,
-    connectionAttempts: 0
+    callCount: 0
 };
 
 // ===== DOM REFS =====
@@ -43,6 +43,7 @@ const dom = {
     joinCallBtn: $('join-call-btn'),
     roomInput: $('room-input'),
     roomDisplay: $('room-display'),
+    roomLinkDisplay: $('room-link-display'),
     participantStatus: $('participant-status'),
     statusText: $('status-text'),
     connectionIndicator: $('connection-indicator'),
@@ -50,7 +51,12 @@ const dom = {
     endCallBtn: $('end-call-btn'),
     copyRoomBtn: $('copy-room-btn'),
     copyLinkBtn: $('copy-link-btn'),
-    toastContainer: $('toast-container')
+    shareWhatsappBtn: $('share-whatsapp-btn'),
+    shareSmsBtn: $('share-sms-btn'),
+    shareEmailBtn: $('share-email-btn'),
+    shareCopyBtn: $('share-copy-btn'),
+    toastContainer: $('toast-container'),
+    callCount: $('call-count')
 };
 
 // ===== TOAST NOTIFICATIONS =====
@@ -151,6 +157,8 @@ async function createRoom() {
                 if (response && response.success) {
                     state.roomId = response.roomId;
                     state.isHost = true;
+                    state.callCount++;
+                    dom.callCount.textContent = state.callCount;
                     showToast(`Room created: ${response.roomId}`, 'success');
                     resolve(response.roomId);
                 } else {
@@ -222,6 +230,7 @@ async function setupWebRTC() {
             state.isConnected = true;
             updateCallStatus('connected');
             showToast('Call connected!', 'success');
+            stopRinging();
         };
         
         state.peerConnection.onicecandidate = (event) => {
@@ -240,6 +249,7 @@ async function setupWebRTC() {
             if (state_change === 'connected') {
                 dom.statusText.textContent = 'Connected - Talk now! 🎤';
                 updateCallStatus('connected');
+                stopRinging();
             } else if (state_change === 'disconnected' || state_change === 'failed') {
                 dom.statusText.textContent = 'Disconnected';
                 updateCallStatus('disconnected');
@@ -261,6 +271,57 @@ async function setupWebRTC() {
             showToast('Failed to access microphone', 'error');
         }
         throw error;
+    }
+}
+
+// ===== RINGTONE =====
+let ringInterval = null;
+
+function playRingtone() {
+    try {
+        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        const oscillator = audioContext.createOscillator();
+        const gainNode = audioContext.createGain();
+        
+        oscillator.connect(gainNode);
+        gainNode.connect(audioContext.destination);
+        
+        oscillator.frequency.value = 800;
+        oscillator.type = 'square';
+        
+        gainNode.gain.setValueAtTime(0.3, audioContext.currentTime);
+        gainNode.gain.exponentialRampToValueAtTime(0.001, audioContext.currentTime + 0.4);
+        
+        oscillator.start();
+        oscillator.stop(audioContext.currentTime + 0.4);
+        
+        setTimeout(() => {
+            const osc2 = audioContext.createOscillator();
+            const gain2 = audioContext.createGain();
+            osc2.connect(gain2);
+            gain2.connect(audioContext.destination);
+            osc2.frequency.value = 800;
+            osc2.type = 'square';
+            gain2.gain.setValueAtTime(0.3, audioContext.currentTime);
+            gain2.gain.exponentialRampToValueAtTime(0.001, audioContext.currentTime + 0.4);
+            osc2.start();
+            osc2.stop(audioContext.currentTime + 0.4);
+        }, 600);
+        
+    } catch (error) {
+        console.warn('Ringtone error:', error);
+    }
+}
+
+function startRinging() {
+    stopRinging();
+    ringInterval = setInterval(playRingtone, 2000);
+}
+
+function stopRinging() {
+    if (ringInterval) {
+        clearInterval(ringInterval);
+        ringInterval = null;
     }
 }
 
@@ -322,7 +383,10 @@ function handleUserJoined(data) {
     console.log('👤 User joined:', data);
     dom.participantStatus.textContent = 'Someone joined! Connecting... 🔗';
     dom.statusText.textContent = 'Connecting...';
-    showToast('Someone joined the room!', 'success');
+    showToast('Someone joined the room! 🔔', 'success');
+    
+    // Play ringtone
+    startRinging();
     
     if (state.isHost && !state.isConnected) {
         state.peerConnection.createOffer()
@@ -344,216 +408,9 @@ function handleUserLeft(data) {
     showToast('Other user left the call', 'info');
     state.isConnected = false;
     updateCallStatus('connecting');
+    stopRinging();
 }
 
 function handleUserMuted(data) {
     if (data.userId !== state.socket.id) {
-        showToast(data.muted ? 'Other user muted 🎤🔇' : 'Other user unmuted 🎤', 'info');
-    }
-}
-
-function handleNewHost(data) {
-    showToast('You are now the host', 'info');
-}
-
-// ===== CALL CONTROLS =====
-function toggleMute() {
-    if (!state.localStream) return;
-    state.isMuted = !state.isMuted;
-    state.localStream.getAudioTracks().forEach(track => {
-        track.enabled = !state.isMuted;
-    });
-    
-    dom.muteBtn.classList.toggle('muted', state.isMuted);
-    const icon = dom.muteBtn.querySelector('.control-icon');
-    icon.textContent = state.isMuted ? '🔇' : '🎤';
-    dom.muteBtn.querySelector('.control-label').textContent = state.isMuted ? 'Unmute' : 'Mute';
-    
-    if (state.socket && state.roomId) {
-        state.socket.emit('toggle-mute', {
-            roomId: state.roomId,
-            muted: state.isMuted
-        });
-    }
-}
-
-function endCall() {
-    if (state.peerConnection) {
-        state.peerConnection.close();
-        state.peerConnection = null;
-    }
-    
-    if (state.localStream) {
-        state.localStream.getTracks().forEach(track => track.stop());
-        state.localStream = null;
-    }
-    
-    state.isConnected = false;
-    state.isInCall = false;
-    state.remoteUserId = null;
-    
-    dom.callScreen.classList.add('hidden');
-    dom.homeScreen.classList.remove('hidden');
-    dom.statusText.textContent = 'Ready';
-    dom.participantStatus.textContent = '';
-    dom.muteBtn.classList.remove('muted');
-    dom.muteBtn.querySelector('.control-icon').textContent = '🎤';
-    dom.muteBtn.querySelector('.control-label').textContent = 'Mute';
-    updateCallStatus('idle');
-    
-    if (state.socket && state.roomId) {
-        state.socket.disconnect();
-        state.socket = null;
-    }
-    
-    state.roomId = null;
-    state.isHost = false;
-    
-    showToast('Call ended', 'info');
-}
-
-function updateCallStatus(status) {
-    const indicator = dom.connectionIndicator;
-    const text = dom.statusText;
-    
-    indicator.className = 'status-indicator';
-    
-    switch(status) {
-        case 'connecting':
-            indicator.classList.add('connecting');
-            text.textContent = 'Connecting...';
-            break;
-        case 'connected':
-            indicator.classList.add('connected');
-            text.textContent = 'Connected - Talk now! 🎤';
-            break;
-        case 'disconnected':
-            indicator.classList.add('disconnected');
-            text.textContent = 'Disconnected';
-            break;
-        default:
-            text.textContent = 'Ready';
-    }
-}
-
-// ===== SHARE FUNCTIONALITY - FIXED FOR GITHUB PAGES =====
-function copyRoomLink() {
-    if (!state.roomId) return;
-    
-    // ✅ FIX: Use /client/ path for GitHub Pages
-    const baseUrl = window.location.origin + '/kudumcaller/client';
-    const link = `${baseUrl}?room=${state.roomId}`;
-    
-    navigator.clipboard.writeText(link).then(() => {
-        showToast('Room link copied! 📋 Share it with anyone.', 'success');
-    }).catch(() => {
-        const textarea = document.createElement('textarea');
-        textarea.value = link;
-        document.body.appendChild(textarea);
-        textarea.select();
-        document.execCommand('copy');
-        textarea.remove();
-        showToast('Room link copied! 📋', 'success');
-    });
-}
-
-// ===== AUTO-JOIN FROM URL =====
-function checkUrlForRoom() {
-    const params = new URLSearchParams(window.location.search);
-    const roomId = params.get('room');
-    if (roomId) {
-        window.history.replaceState({}, '', window.location.pathname);
-        setTimeout(() => handleJoinRoom(roomId), 500);
-    }
-}
-
-// ===== EVENT HANDLERS =====
-async function handleCreateCall() {
-    try {
-        await ensureSocket();
-        await createRoom();
-        
-        dom.homeScreen.classList.add('hidden');
-        dom.callScreen.classList.remove('hidden');
-        dom.roomDisplay.textContent = state.roomId;
-        dom.participantStatus.textContent = 'Waiting for someone to join... 🔄';
-        
-        state.isInCall = true;
-        await initiateCall();
-        
-        setTimeout(copyRoomLink, 1000);
-        
-    } catch (error) {
-        console.error('Create call error:', error);
-        showToast('Failed to create call', 'error');
-    }
-}
-
-async function handleJoinRoom(roomId) {
-    if (!roomId) {
-        roomId = dom.roomInput.value.trim();
-    }
-    
-    if (!roomId) {
-        showToast('Please enter a room code', 'error');
-        return;
-    }
-    
-    try {
-        await ensureSocket();
-        await joinRoom(roomId);
-        
-        dom.homeScreen.classList.add('hidden');
-        dom.callScreen.classList.remove('hidden');
-        dom.roomDisplay.textContent = roomId;
-        dom.participantStatus.textContent = 'Joining call... 📞';
-        
-        state.isInCall = true;
-        await initiateCall();
-        
-    } catch (error) {
-        console.error('Join room error:', error);
-        showToast(error.message || 'Failed to join room', 'error');
-    }
-}
-
-// ===== EVENT LISTENERS =====
-dom.createCallBtn.addEventListener('click', handleCreateCall);
-dom.joinCallBtn.addEventListener('click', () => handleJoinRoom());
-dom.roomInput.addEventListener('keypress', (e) => {
-    if (e.key === 'Enter') handleJoinRoom();
-});
-dom.endCallBtn.addEventListener('click', endCall);
-dom.muteBtn.addEventListener('click', toggleMute);
-dom.copyRoomBtn.addEventListener('click', copyRoomLink);
-dom.copyLinkBtn.addEventListener('click', copyRoomLink);
-
-// ===== KEYBOARD SHORTCUTS =====
-document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && state.isInCall) {
-        endCall();
-    }
-    if (e.key === 'm' && state.isInCall) {
-        toggleMute();
-    }
-});
-
-// ===== INIT =====
-async function init() {
-    try {
-        await connectSocket();
-        hideLoading();
-        checkUrlForRoom();
-        
-        console.log('🎯 KudumCaller initialized');
-        console.log('📱 Share a URL to start a voice call!');
-        console.log('🔗 Server URL:', CONFIG.SERVER_URL);
-        
-    } catch (error) {
-        console.error('Init error:', error);
-        hideLoading();
-        showToast('Failed to connect to server. Please refresh.', 'error');
-    }
-}
-
-init();
+        showToast(data.muted ? 'Other user muted
