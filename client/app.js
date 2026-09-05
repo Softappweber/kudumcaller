@@ -8,7 +8,6 @@ const CONFIG = {
         ? 'http://localhost:5000' 
         : 'https://kudumcaller.onrender.com',
     MAX_RETRIES: 3,
-    // ✅ CLOUDFLARE 100% FREE TURN/STUN SERVERS - PRODUCTION READY
     ICE_SERVERS: {
         iceServers: [
             // Cloudflare STUN over UDP
@@ -24,8 +23,8 @@ const CONFIG = {
                     'turn:turn.cloudflare.com:3478?transport=udp',
                     'turn:turn.cloudflare.com:53?transport=udp'
                 ],
-                username: 'any-username',  // Cloudflare TURN requires any non-empty username
-                credential: 'any-credential'  // Cloudflare TURN requires any non-empty credential
+                username: 'any-username',
+                credential: 'any-credential'
             },
             // Cloudflare TURN over TCP
             {
@@ -68,7 +67,8 @@ const state = {
     isInCall: false,
     isRinging: false,
     remoteUserId: null,
-    callCount: 0
+    callCount: 0,
+    waitingForAnswer: false
 };
 
 // ===== DOM REFS =====
@@ -318,47 +318,53 @@ async function setupWebRTC() {
     }
 }
 
-// ===== RINGTONE =====
+// ===== RINGTONE (Mobile-Friendly) =====
 let ringInterval = null;
+let ringtoneAudio = null;
 
 function playRingtone() {
+    // Only play if user has interacted with the page
+    if (!window.userInteracted) {
+        console.log('⏳ Waiting for user interaction before playing ringtone');
+        return;
+    }
+    
     try {
-        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-        const oscillator = audioContext.createOscillator();
-        const gainNode = audioContext.createGain();
+        // Try using HTML5 Audio first (more reliable on mobile)
+        if (!ringtoneAudio) {
+            ringtoneAudio = new Audio('data:audio/wav;base64,UklGRnoAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoAAACBhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqF');
+            ringtoneAudio.volume = 0.5;
+            ringtoneAudio.loop = true;
+        }
         
-        oscillator.connect(gainNode);
-        gainNode.connect(audioContext.destination);
-        
-        oscillator.frequency.value = 800;
-        oscillator.type = 'square';
-        
-        gainNode.gain.setValueAtTime(0.3, audioContext.currentTime);
-        gainNode.gain.exponentialRampToValueAtTime(0.001, audioContext.currentTime + 0.4);
-        
-        oscillator.start();
-        oscillator.stop(audioContext.currentTime + 0.4);
-        
-        setTimeout(() => {
-            const osc2 = audioContext.createOscillator();
-            const gain2 = audioContext.createGain();
-            osc2.connect(gain2);
-            gain2.connect(audioContext.destination);
-            osc2.frequency.value = 800;
-            osc2.type = 'square';
-            gain2.gain.setValueAtTime(0.3, audioContext.currentTime);
-            gain2.gain.exponentialRampToValueAtTime(0.001, audioContext.currentTime + 0.4);
-            osc2.start();
-            osc2.stop(audioContext.currentTime + 0.4);
-        }, 600);
-        
-    } catch (error) {
-        console.warn('Ringtone error:', error);
+        ringtoneAudio.play().catch(() => {
+            // Fallback: Use Web Audio API oscillator
+            const ctx = new (window.AudioContext || window.webkitAudioContext)();
+            if (ctx.state === 'suspended') {
+                ctx.resume();
+            }
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+            osc.frequency.value = 800;
+            osc.type = 'square';
+            gain.gain.value = 0.2;
+            osc.start();
+            setTimeout(() => osc.stop(), 300);
+        });
+    } catch (e) {
+        console.warn('Ringtone error:', e);
     }
 }
 
 function startRinging() {
     stopRinging();
+    if (!window.userInteracted) {
+        console.log('⏳ Waiting for user interaction to start ringing');
+        // Try to play once anyway (some browsers allow it)
+        playRingtone();
+    }
     state.isRinging = true;
     ringInterval = setInterval(playRingtone, 2000);
 }
@@ -369,21 +375,31 @@ function stopRinging() {
         clearInterval(ringInterval);
         ringInterval = null;
     }
+    if (ringtoneAudio) {
+        ringtoneAudio.pause();
+        ringtoneAudio.currentTime = 0;
+    }
 }
 
 // ===== INCOMING CALL UI =====
 function showIncomingCall() {
     dom.incomingCall.classList.remove('hidden');
+    // Try to play ringtone immediately if user has interacted
+    if (window.userInteracted) {
+        playRingtone();
+    }
 }
 
 function hideIncomingCall() {
     dom.incomingCall.classList.add('hidden');
+    stopRinging();
 }
 
 function handleIncomingCall(data) {
-    console.log('Incoming call from:', data.from);
+    console.log('📞 Incoming call from:', data.from);
     showIncomingCall();
-    startRinging();
+    dom.participantStatus.textContent = 'Incoming call... 📞';
+    dom.statusText.textContent = 'Tap Accept to answer';
     showToast('Incoming call!', 'info');
 }
 
@@ -395,21 +411,23 @@ async function handleSignal(data) {
         const { from, signal } = data;
         
         if (signal.offer) {
+            // Show incoming call UI
             showIncomingCall();
-            startRinging();
+            dom.participantStatus.textContent = 'Incoming call... 📞';
+            dom.statusText.textContent = 'Tap Accept to answer';
             
-            await state.peerConnection.setRemoteDescription(new RTCSessionDescription(signal.offer));
-            const answer = await state.peerConnection.createAnswer();
-            await state.peerConnection.setLocalDescription(answer);
+            // Store the offer for later use (when user taps Accept)
+            state.pendingOffer = signal.offer;
             
-            state.socket.emit('signal', {
-                roomId: state.roomId,
-                signal: { answer: answer }
-            });
+            // Don't auto-answer - wait for user to tap Accept
+            
         } else if (signal.answer) {
             await state.peerConnection.setRemoteDescription(new RTCSessionDescription(signal.answer));
             hideIncomingCall();
             stopRinging();
+            dom.statusText.textContent = 'Connected - Talk now! 🎤';
+            updateCallStatus('connected');
+            state.isConnected = true;
         } else if (signal.candidate) {
             await state.peerConnection.addIceCandidate(new RTCIceCandidate(signal.candidate));
         }
@@ -447,21 +465,26 @@ async function initiateCall() {
 }
 
 function handleUserJoined(data) {
-    console.log('👤 User joined:', data);
-    dom.participantStatus.textContent = 'Someone joined! Connecting... 🔗';
-    dom.statusText.textContent = 'Connecting...';
-    showToast('Someone joined the room! 🔔', 'success');
+    console.log('👤 Someone joined:', data);
     
-    if (state.isHost && !state.isConnected) {
-        state.peerConnection.createOffer()
-            .then(offer => state.peerConnection.setLocalDescription(offer))
-            .then(() => {
-                state.socket.emit('signal', {
-                    roomId: state.roomId,
-                    signal: { offer: state.peerConnection.localDescription }
-                });
-            })
-            .catch(console.error);
+    // Show incoming call UI
+    dom.incomingCall.classList.remove('hidden');
+    dom.participantStatus.textContent = 'Incoming call... 📞';
+    dom.statusText.textContent = 'Tap Accept to answer';
+    
+    // Try to play ringtone if user has interacted
+    if (window.userInteracted) {
+        startRinging();
+    } else {
+        // Show a message to tap the screen
+        showToast('Tap the screen to enable audio', 'info');
+    }
+    
+    // Notify the other user that we're ringing
+    if (state.socket && state.roomId) {
+        state.socket.emit('ringing', {
+            roomId: state.roomId
+        });
     }
 }
 
@@ -521,6 +544,7 @@ function endCall() {
     state.isConnected = false;
     state.isInCall = false;
     state.remoteUserId = null;
+    state.pendingOffer = null;
     hideIncomingCall();
     stopRinging();
     
@@ -545,16 +569,78 @@ function endCall() {
 }
 
 function acceptCall() {
-    hideIncomingCall();
+    // Resume audio context on user interaction
+    if (window.audioContext && window.audioContext.state === 'suspended') {
+        window.audioContext.resume();
+    }
+    
+    window.userInteracted = true;
+    
+    dom.incomingCall.classList.add('hidden');
     stopRinging();
+    
+    dom.statusText.textContent = 'Connecting...';
+    updateCallStatus('connecting');
+    dom.participantStatus.textContent = 'Connecting... 🔗';
+    
     showToast('Call accepted!', 'success');
+    
+    // If we have a pending offer, answer it
+    if (state.pendingOffer) {
+        state.peerConnection.setRemoteDescription(new RTCSessionDescription(state.pendingOffer))
+            .then(() => {
+                return state.peerConnection.createAnswer();
+            })
+            .then(answer => {
+                return state.peerConnection.setLocalDescription(answer);
+            })
+            .then(() => {
+                state.socket.emit('signal', {
+                    roomId: state.roomId,
+                    signal: { answer: state.peerConnection.localDescription }
+                });
+                state.pendingOffer = null;
+            })
+            .catch(console.error);
+    } else if (state.peerConnection && state.peerConnection.remoteDescription) {
+        // Fallback: try to create answer anyway
+        state.peerConnection.createAnswer()
+            .then(answer => state.peerConnection.setLocalDescription(answer))
+            .then(() => {
+                state.socket.emit('signal', {
+                    roomId: state.roomId,
+                    signal: { answer: state.peerConnection.localDescription }
+                });
+            })
+            .catch(console.error);
+    } else {
+        // If no offer, maybe we're the host
+        if (state.isHost) {
+            state.peerConnection.createOffer()
+                .then(offer => state.peerConnection.setLocalDescription(offer))
+                .then(() => {
+                    state.socket.emit('signal', {
+                        roomId: state.roomId,
+                        signal: { offer: state.peerConnection.localDescription }
+                    });
+                })
+                .catch(console.error);
+        }
+    }
 }
 
 function declineCall() {
     hideIncomingCall();
     stopRinging();
-    endCall();
+    state.pendingOffer = null;
     showToast('Call declined', 'info');
+    // Notify the other user
+    if (state.socket && state.roomId) {
+        state.socket.emit('call-declined', {
+            roomId: state.roomId
+        });
+    }
+    endCall();
 }
 
 function updateCallStatus(status) {
@@ -656,6 +742,15 @@ function checkUrlForRoom() {
 // ===== EVENT HANDLERS =====
 async function handleCreateCall() {
     try {
+        // Ensure user interaction for audio
+        if (!window.userInteracted) {
+            showToast('Tap the screen to enable audio', 'info');
+            // Try to resume audio context
+            if (window.audioContext && window.audioContext.state === 'suspended') {
+                window.audioContext.resume();
+            }
+        }
+        
         await ensureSocket();
         await createRoom();
         
@@ -687,6 +782,14 @@ async function handleJoinRoom(roomId) {
     }
     
     try {
+        // Ensure user interaction for audio
+        if (!window.userInteracted) {
+            showToast('Tap the screen to enable audio', 'info');
+            if (window.audioContext && window.audioContext.state === 'suspended') {
+                window.audioContext.resume();
+            }
+        }
+        
         await ensureSocket();
         await joinRoom(roomId);
         
@@ -703,6 +806,34 @@ async function handleJoinRoom(roomId) {
     } catch (error) {
         console.error('Join room error:', error);
         showToast(error.message || 'Failed to join room', 'error');
+    }
+}
+
+// ===== ENABLE AUDIO ON USER INTERACTION =====
+function enableAudioOnInteraction() {
+    if (window.userInteracted) return;
+    
+    window.userInteracted = true;
+    console.log('🎤 Audio enabled by user interaction');
+    
+    // Resume audio context
+    if (window.audioContext && window.audioContext.state === 'suspended') {
+        window.audioContext.resume();
+    }
+    
+    // Try to play a silent sound to unlock audio
+    try {
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        gain.gain.value = 0.001;
+        osc.start();
+        osc.stop(ctx.currentTime + 0.1);
+        window.audioContext = ctx;
+    } catch (e) {
+        console.warn('Audio unlock failed:', e);
     }
 }
 
@@ -723,6 +854,10 @@ dom.shareWhatsappBtn.addEventListener('click', shareViaWhatsApp);
 dom.shareSmsBtn.addEventListener('click', shareViaSMS);
 dom.shareEmailBtn.addEventListener('click', shareViaEmail);
 dom.shareCopyBtn.addEventListener('click', copyRoomLink);
+
+// ===== ENABLE AUDIO ON ANY CLICK OR TOUCH =====
+document.addEventListener('click', enableAudioOnInteraction, { once: false });
+document.addEventListener('touchstart', enableAudioOnInteraction, { once: false });
 
 // ===== KEYBOARD SHORTCUTS =====
 document.addEventListener('keydown', (e) => {
@@ -745,6 +880,7 @@ async function init() {
         console.log('📱 Share a URL to start a voice call!');
         console.log('🔗 Server URL:', CONFIG.SERVER_URL);
         console.log('🔄 Cloudflare TURN/STUN servers configured');
+        console.log('📱 Tap the screen to enable audio on mobile');
         
     } catch (error) {
         console.error('Init error:', error);
