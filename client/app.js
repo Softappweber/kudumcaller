@@ -73,7 +73,8 @@ const state = {
     isReceiver: false,
     pendingOffer: null,
     isRinging: false,
-    wakeLock: null
+    wakeLock: null,
+    remoteAudio: null
 };
 
 let swRegistration = null;
@@ -256,6 +257,57 @@ async function ensureSocket() {
     return await connectSocket();
 }
 
+// ===== REMOTE AUDIO PLAYBACK =====
+// Two bugs this fixes vs. a bare `new Audio()` in ontrack:
+// 1. An audio element with no reference held anywhere and never added to
+//    the DOM can be garbage-collected mid-call in some browsers, silently
+//    killing playback. We keep it on `state` and append it (hidden).
+// 2. If the browser's autoplay policy blocks .play() (common when the
+//    remote track arrives after an async signaling round-trip, so the
+//    browser no longer associates it with your "Join" tap), the call
+//    still shows "Connected" - because that status comes from the
+//    WebRTC connection state, not from whether audio is actually
+//    playing. Previously that failure only went to console.warn, so you
+//    saw "Connected" with total silence and no idea why. Now we tell you
+//    and retry on your very next tap/click.
+function attachRemoteAudio(stream) {
+    if (!state.remoteAudio) {
+        state.remoteAudio = document.createElement('audio');
+        state.remoteAudio.id = 'remote-audio';
+        state.remoteAudio.autoplay = true;
+        state.remoteAudio.playsInline = true; // required for iOS Safari
+        state.remoteAudio.style.display = 'none';
+        document.body.appendChild(state.remoteAudio);
+    }
+    state.remoteAudio.srcObject = stream;
+    state.remoteAudio.muted = false;
+    state.remoteAudio.volume = 1;
+
+    const tryPlay = () => state.remoteAudio.play();
+
+    tryPlay().catch((err) => {
+        console.warn('Remote audio autoplay blocked:', err.name, err.message);
+        showToast('Tap anywhere to enable call audio', 'error', 6000);
+
+        const retryOnGesture = () => {
+            tryPlay()
+                .then(() => showToast('Audio enabled', 'success'))
+                .catch((e) => console.warn('Retry play failed:', e));
+        };
+        document.addEventListener('click', retryOnGesture, { once: true });
+        document.addEventListener('touchstart', retryOnGesture, { once: true });
+    });
+}
+
+function detachRemoteAudio() {
+    if (state.remoteAudio) {
+        state.remoteAudio.pause();
+        state.remoteAudio.srcObject = null;
+        state.remoteAudio.remove();
+        state.remoteAudio = null;
+    }
+}
+
 // ===== WEBRTC =====
 async function setupWebRTC() {
     try {
@@ -267,9 +319,7 @@ async function setupWebRTC() {
             state.peerConnection.addTrack(track, state.localStream);
         });
         state.peerConnection.ontrack = (event) => {
-            const remoteAudio = new Audio();
-            remoteAudio.srcObject = event.streams[0];
-            remoteAudio.play().catch(err => console.warn('Autoplay:', err));
+            attachRemoteAudio(event.streams[0]);
             dom.statusText.textContent = 'Connected - Talk now!';
             state.isConnected = true;
             updateCallStatus('connected');
@@ -497,6 +547,7 @@ function toggleMute() {
 function endCall() {
     if (state.peerConnection) { state.peerConnection.close(); state.peerConnection = null; }
     if (state.localStream) { state.localStream.getTracks().forEach(t => t.stop()); state.localStream = null; }
+    detachRemoteAudio();
     state.isConnected = false;
     state.isInCall = false;
     state.pendingOffer = null;
