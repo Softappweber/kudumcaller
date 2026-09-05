@@ -3,18 +3,22 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>SoloCall - Voice calls without phone numbers</title>
+    <base href="/kudumcaller/client/">
+    <title>SoloDS KudumCaller - Voice calls without phone numbers</title>
+    
+    <!-- Socket.io from CDN -->
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    
     <link rel="stylesheet" href="style.css">
     <link rel="manifest" href="manifest.json">
     <meta name="theme-color" content="#6C63FF">
     <meta name="description" content="Free voice calls with just a URL. No phone number needed.">
-    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
 </head>
 <body>
     <!-- Loading Screen -->
     <div id="loading-screen">
         <div class="loader"></div>
-        <p>Connecting...</p>
+        <p>Connecting to SoloDS Cloud...</p>
     </div>
 
     <!-- Main Container -->
@@ -23,7 +27,7 @@
         <header>
             <div class="logo">
                 <span class="logo-icon">📞</span>
-                <span class="logo-text">Solo<span class="highlight">Call</span></span>
+                <span class="logo-text">SoloDS <span class="highlight">KudumCaller</span></span>
             </div>
             <div class="header-status">
                 <span id="connection-status" class="status-badge">● Connected</span>
@@ -37,6 +41,7 @@
                 <div class="hero">
                     <h1>Voice calls without<br><span class="gradient-text">phone numbers</span></h1>
                     <p class="subtitle">Share a link and talk instantly. No app installs needed.</p>
+                    <p class="subtitle-small">🔒 Powered by SoloDS Secure Network</p>
                 </div>
 
                 <div class="action-buttons">
@@ -72,21 +77,40 @@
             <!-- Call Screen -->
             <div id="call-screen" class="hidden">
                 <div class="call-container">
-                    <!-- Room Info -->
                     <div class="call-info">
                         <div class="room-code">
-                            <span class="label">Room:</span>
+                            <span class="label">🔑 Room:</span>
                             <span id="room-display" class="code">------</span>
-                            <button id="copy-room-btn" class="btn-icon-only" title="Copy room link">
-                                📋
-                            </button>
+                            <button id="copy-room-btn" class="btn-icon-only" title="Copy room link">📋</button>
                         </div>
                         <div class="participant-info">
                             <span id="participant-status">Waiting for someone to join...</span>
                         </div>
                     </div>
 
-                    <!-- Call Status -->
+                    <!-- Link Display Box -->
+                    <div class="link-box">
+                        <span class="link-label">📤 Share this link:</span>
+                        <div class="link-url">
+                            <input type="text" id="room-link-display" readonly>
+                            <button id="copy-link-btn" class="btn-icon-only">📋</button>
+                        </div>
+                        <div class="share-buttons">
+                            <button id="share-whatsapp-btn" class="share-btn whatsapp">
+                                <span>💬</span> WhatsApp
+                            </button>
+                            <button id="share-sms-btn" class="share-btn sms">
+                                <span>✉️</span> SMS
+                            </button>
+                            <button id="share-email-btn" class="share-btn email">
+                                <span>📧</span> Email
+                            </button>
+                            <button id="share-copy-btn" class="share-btn copy">
+                                <span>📋</span> Copy
+                            </button>
+                        </div>
+                    </div>
+
                     <div class="call-status">
                         <div id="connection-indicator" class="status-indicator connecting">
                             <span class="pulse"></span>
@@ -94,7 +118,6 @@
                         </div>
                     </div>
 
-                    <!-- Call Controls -->
                     <div class="call-controls">
                         <button id="mute-btn" class="control-btn" title="Mute">
                             <span class="control-icon">🎤</span>
@@ -104,14 +127,15 @@
                             <span class="control-icon">📴</span>
                             <span class="control-label">End</span>
                         </button>
-                        <button id="copy-link-btn" class="control-btn" title="Share link">
-                            <span class="control-icon">🔗</span>
-                            <span class="control-label">Share</span>
-                        </button>
                     </div>
                 </div>
             </div>
         </main>
+
+        <!-- Footer -->
+        <footer>
+            <p>© 2026 SoloDS Software • <span id="call-count">0</span> calls made</p>
+        </footer>
 
         <!-- Toast Notifications -->
         <div id="toast-container"></div>
