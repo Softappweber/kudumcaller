@@ -40,7 +40,8 @@ const state = {
     callCount: 0,
     isCaller: false,
     isReceiver: false,
-    pendingOffer: null
+    pendingOffer: null,
+    isRinging: false
 };
 
 // ===== DOM REFS =====
@@ -111,7 +112,7 @@ function connectSocket() {
                 timeout: 10000
             });
             socket.on('connect', () => {
-                console.log('🔗 Socket connected');
+                console.log('Socket connected');
                 state.socket = socket;
                 updateConnectionStatus(true);
                 resolve(socket);
@@ -122,7 +123,7 @@ function connectSocket() {
                 reject(error);
             });
             socket.on('disconnect', () => {
-                console.log('🔌 Disconnected');
+                console.log('Disconnected');
                 updateConnectionStatus(false);
                 if (state.isInCall) endCall();
             });
@@ -131,6 +132,9 @@ function connectSocket() {
             socket.on('user-left', handleUserLeft);
             socket.on('user-muted', handleUserMuted);
             socket.on('new-host', handleNewHost);
+            socket.on('incoming-call', handleIncomingCall);
+            socket.on('call-connected', handleCallConnected);
+            socket.on('call-ended', handleCallEnded);
         } catch (error) {
             reject(error);
         }
@@ -140,10 +144,10 @@ function connectSocket() {
 function updateConnectionStatus(connected) {
     const badge = dom.connectionStatus;
     if (connected) {
-        badge.textContent = '● Connected';
+        badge.textContent = ' Connected';
         badge.className = 'status-badge';
     } else {
-        badge.textContent = '● Disconnected';
+        badge.textContent = ' Disconnected';
         badge.className = 'status-badge disconnected';
     }
 }
@@ -218,7 +222,7 @@ async function setupWebRTC() {
             const remoteAudio = new Audio();
             remoteAudio.srcObject = event.streams[0];
             remoteAudio.play().catch(err => console.warn('Autoplay:', err));
-            dom.statusText.textContent = 'Connected - Talk now! 🎤';
+            dom.statusText.textContent = 'Connected - Talk now!';
             state.isConnected = true;
             updateCallStatus('connected');
             showToast('Call connected!', 'success');
@@ -237,7 +241,7 @@ async function setupWebRTC() {
             const s = state.peerConnection.connectionState;
             console.log('Connection state:', s);
             if (s === 'connected') {
-                dom.statusText.textContent = 'Connected - Talk now! 🎤';
+                dom.statusText.textContent = 'Connected - Talk now!';
                 updateCallStatus('connected');
                 dom.incomingCall.classList.add('hidden');
                 stopRinging();
@@ -295,6 +299,31 @@ function stopRinging() {
     if (ringtoneAudio) { ringtoneAudio.pause(); ringtoneAudio.currentTime = 0; }
 }
 
+// ===== CALL EVENTS =====
+function handleIncomingCall(data) {
+    console.log('Incoming call from:', data.from);
+    dom.incomingCall.classList.remove('hidden');
+    dom.participantStatus.textContent = 'Incoming call...';
+    dom.statusText.textContent = 'Tap Accept to answer';
+    if (window.userInteracted) startRinging();
+    showToast('Incoming call!', 'info');
+}
+
+function handleCallConnected(data) {
+    console.log('Call connected:', data);
+    dom.statusText.textContent = 'Connected - Talk now!';
+    updateCallStatus('connected');
+    dom.incomingCall.classList.add('hidden');
+    stopRinging();
+    showToast('Call connected!', 'success');
+}
+
+function handleCallEnded(data) {
+    console.log('Call ended:', data);
+    showToast('Call ended', 'info');
+    endCall();
+}
+
 // ===== SIGNALING =====
 async function handleSignal(data) {
     if (!state.peerConnection) return;
@@ -303,7 +332,7 @@ async function handleSignal(data) {
         if (signal.offer) {
             // RECEIVER: Show incoming call
             dom.incomingCall.classList.remove('hidden');
-            dom.participantStatus.textContent = 'Incoming call... 📞';
+            dom.participantStatus.textContent = 'Incoming call...';
             dom.statusText.textContent = 'Tap Accept to answer';
             state.pendingOffer = signal.offer;
             if (window.userInteracted) startRinging();
@@ -312,9 +341,10 @@ async function handleSignal(data) {
             await state.peerConnection.setRemoteDescription(new RTCSessionDescription(signal.answer));
             dom.incomingCall.classList.add('hidden');
             stopRinging();
-            dom.statusText.textContent = 'Connected - Talk now! 🎤';
+            dom.statusText.textContent = 'Connected - Talk now!';
             updateCallStatus('connected');
             state.isConnected = true;
+            showToast('Call connected!', 'success');
         } else if (signal.candidate) {
             await state.peerConnection.addIceCandidate(new RTCIceCandidate(signal.candidate));
         }
@@ -325,10 +355,10 @@ async function handleSignal(data) {
 
 // ===== USER EVENTS =====
 function handleUserJoined(data) {
-    console.log('👤 Someone joined:', data);
+    console.log('User joined:', data);
     // CALLER: Someone joined, show "Calling..."
     if (state.isCaller) {
-        dom.participantStatus.textContent = 'Calling... 📞';
+        dom.participantStatus.textContent = 'Calling...';
         dom.statusText.textContent = 'Ringing...';
         // Send offer
         state.peerConnection.createOffer()
@@ -345,7 +375,7 @@ function handleUserJoined(data) {
 }
 
 function handleUserLeft(data) {
-    console.log('👋 User left:', data);
+    console.log('User left:', data);
     dom.participantStatus.textContent = 'User left the call';
     dom.statusText.textContent = 'Waiting for someone...';
     showToast('Other user left', 'info');
@@ -413,7 +443,7 @@ function acceptCall() {
     stopRinging();
     dom.statusText.textContent = 'Connecting...';
     updateCallStatus('connecting');
-    dom.participantStatus.textContent = 'Connecting... 🔗';
+    dom.participantStatus.textContent = 'Connecting...';
     showToast('Call accepted!', 'success');
     
     if (state.pendingOffer) {
@@ -426,6 +456,8 @@ function acceptCall() {
                     signal: { answer: state.peerConnection.localDescription }
                 });
                 state.pendingOffer = null;
+                // Notify server call was accepted
+                state.socket.emit('call-accepted', { roomId: state.roomId });
             })
             .catch(console.error);
     }
@@ -435,6 +467,9 @@ function declineCall() {
     dom.incomingCall.classList.add('hidden');
     stopRinging();
     state.pendingOffer = null;
+    if (state.socket && state.roomId) {
+        state.socket.emit('call-declined', { roomId: state.roomId });
+    }
     showToast('Call declined', 'info');
     endCall();
 }
@@ -445,7 +480,7 @@ function updateCallStatus(status) {
     indicator.className = 'status-indicator';
     switch(status) {
         case 'connecting': indicator.classList.add('connecting'); text.textContent = 'Connecting...'; break;
-        case 'connected': indicator.classList.add('connected'); text.textContent = 'Connected - Talk now! 🎤'; break;
+        case 'connected': indicator.classList.add('connected'); text.textContent = 'Connected - Talk now!'; break;
         case 'disconnected': indicator.classList.add('disconnected'); text.textContent = 'Disconnected'; break;
         default: text.textContent = 'Ready';
     }
@@ -517,7 +552,7 @@ async function handleCreateCall() {
         dom.homeScreen.classList.add('hidden');
         dom.callScreen.classList.remove('hidden');
         dom.roomDisplay.textContent = state.roomId;
-        dom.participantStatus.textContent = 'Waiting for someone to join... 🔄';
+        dom.participantStatus.textContent = 'Waiting for someone to join...';
         state.isInCall = true;
         await setupWebRTC();
         updateLinkDisplay();
@@ -545,7 +580,7 @@ async function handleJoinRoom(roomId) {
         dom.homeScreen.classList.add('hidden');
         dom.callScreen.classList.remove('hidden');
         dom.roomDisplay.textContent = roomId;
-        dom.participantStatus.textContent = 'Joining call... 📞';
+        dom.participantStatus.textContent = 'Joining call...';
         state.isInCall = true;
         await setupWebRTC();
         updateLinkDisplay();
@@ -558,7 +593,7 @@ async function handleJoinRoom(roomId) {
 function enableAudioOnInteraction() {
     if (window.userInteracted) return;
     window.userInteracted = true;
-    console.log('🎤 Audio enabled');
+    console.log('Audio enabled');
     try {
         const ctx = new (window.AudioContext || window.webkitAudioContext)();
         const osc = ctx.createOscillator();
@@ -601,9 +636,9 @@ async function init() {
         await connectSocket();
         hideLoading();
         checkUrlForRoom();
-        console.log('🎯 SoloDS KudumCaller initialized');
-        console.log('🔗 Server:', CONFIG.SERVER_URL);
-        console.log('📱 Tap screen to enable audio on mobile');
+        console.log('SoloDS KudumCaller initialized');
+        console.log('Server:', CONFIG.SERVER_URL);
+        console.log('Tap screen to enable audio on mobile');
     } catch (error) {
         console.error('Init error:', error);
         hideLoading();
