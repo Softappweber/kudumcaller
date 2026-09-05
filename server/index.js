@@ -9,7 +9,7 @@ const app = express();
 const server = http.createServer(app);
 
 // ===== PORT CONFIGURATION =====
-const PORT = process.env.PORT || 5000;  // ✅ Render sets this to 10000
+const PORT = process.env.PORT || 5000;
 
 // ===== CORS CONFIGURATION =====
 const CLIENT_URL = process.env.CLIENT_URL || 'https://softappweber.github.io';
@@ -19,10 +19,8 @@ app.use(cors({
     credentials: true
 }));
 
-// Serve static files (for the client)
 app.use(express.static('../client'));
 
-// Socket.io with CORS
 const io = new Server(server, {
     cors: {
         origin: CLIENT_URL,
@@ -47,7 +45,6 @@ io.on('connection', (socket) => {
     console.log(`🟢 User connected: ${socket.id}`);
     stats.totalUsers++;
 
-    // Create a new room
     socket.on('create-room', (callback) => {
         const roomId = uuidv4().substring(0, 8);
         rooms.set(roomId, {
@@ -67,7 +64,6 @@ io.on('connection', (socket) => {
         if (callback) callback({ roomId, success: true });
     });
 
-    // Join an existing room
     socket.on('join-room', (roomId, callback) => {
         if (!rooms.has(roomId)) {
             if (callback) callback({ success: false, error: 'Room not found' });
@@ -76,7 +72,6 @@ io.on('connection', (socket) => {
         
         const room = rooms.get(roomId);
         
-        // Check if room is full (max 2 for now)
         if (room.participants.length >= 2) {
             if (callback) callback({ success: false, error: 'Room is full' });
             return;
@@ -87,7 +82,6 @@ io.on('connection', (socket) => {
         socket.data.roomId = roomId;
         socket.data.isHost = false;
         
-        // Notify others in room
         socket.to(roomId).emit('user-joined', {
             userId: socket.id,
             timestamp: Date.now()
@@ -99,7 +93,6 @@ io.on('connection', (socket) => {
         if (callback) callback({ success: true, roomId });
     });
 
-    // WebRTC signaling
     socket.on('signal', ({ roomId, signal }) => {
         socket.to(roomId).emit('signal', {
             from: socket.id,
@@ -107,7 +100,6 @@ io.on('connection', (socket) => {
         });
     });
 
-    // Get room info
     socket.on('get-room-info', (roomId, callback) => {
         if (rooms.has(roomId)) {
             const room = rooms.get(roomId);
@@ -121,7 +113,6 @@ io.on('connection', (socket) => {
         }
     });
 
-    // Toggle mute (notify others)
     socket.on('toggle-mute', ({ roomId, muted }) => {
         socket.to(roomId).emit('user-muted', {
             userId: socket.id,
@@ -129,7 +120,6 @@ io.on('connection', (socket) => {
         });
     });
 
-    // Handle disconnect
     socket.on('disconnect', () => {
         console.log(`🔴 User disconnected: ${socket.id}`);
         stats.totalUsers--;
@@ -138,22 +128,18 @@ io.on('connection', (socket) => {
         if (roomId && rooms.has(roomId)) {
             const room = rooms.get(roomId);
             
-            // Remove user from room
             room.participants = room.participants.filter(id => id !== socket.id);
             
-            // If room is empty, delete it
             if (room.participants.length === 0) {
                 rooms.delete(roomId);
                 stats.activeCalls--;
                 console.log(`🗑️ Room ${roomId} deleted (empty)`);
             } else {
-                // Notify remaining participants
                 socket.to(roomId).emit('user-left', {
                     userId: socket.id,
                     timestamp: Date.now()
                 });
                 
-                // If host left, assign new host
                 if (socket.data.isHost) {
                     const newHost = room.participants[0];
                     io.to(roomId).emit('new-host', { userId: newHost });
@@ -194,7 +180,7 @@ app.get('/stats', (req, res) => {
 
 // ===== START SERVER =====
 server.listen(PORT, () => {
-    console.log(`🎯 KudumCaller Server running on port ${PORT}`);
+    console.log(`🎯 SoloDS KudumCaller Server running on port ${PORT}`);
     console.log(`🌐 Health check: http://localhost:${PORT}/health`);
     console.log(`📊 Stats: http://localhost:${PORT}/stats`);
     console.log(`🔗 CORS allowed: ${CLIENT_URL}`);
